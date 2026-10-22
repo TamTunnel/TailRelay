@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tailrelay — lightweight WireGuard server + Tailscale bridge</title>
+<style>
+:root { --bg:#0f1115; --card:#171a21; --fg:#e8eaed; --dim:#9aa0a6; --accent:#7cc4ff; --ok:#7ee2a8; --line:#2a2e37; }
+* { box-sizing:border-box; }
+body { background:var(--bg); color:var(--fg); font-family:system-ui,-apple-system,sans-serif; margin:0; line-height:1.6; }
+main { max-width:960px; margin:0 auto; padding:2rem 1.2rem 4rem; }
+.hero { text-align:center; padding:3rem 0 2rem; }
+.hero h1 { font-size:2.6rem; margin:0 0 .4rem; }
+.hero h1 span { color:var(--accent); }
+.hero p.tag { color:var(--dim); font-size:1.15rem; max-width:640px; margin:0 auto 1.5rem; }
+.btns a { display:inline-block; background:var(--accent); color:#0b0d10; font-weight:700; border-radius:6px; padding:.6rem 1.3rem; margin:.3rem; text-decoration:none; }
+.btns a.ghost { background:none; color:var(--accent); border:1px solid var(--accent); }
+.stats { display:flex; gap:1rem; justify-content:center; flex-wrap:wrap; margin:2rem 0; }
+.stat { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:.8rem 1.4rem; text-align:center; }
+.stat b { display:block; font-size:1.3rem; color:var(--accent); }
+.stat span { color:var(--dim); font-size:.85rem; }
+h2 { margin-top:3rem; border-bottom:1px solid var(--line); padding-bottom:.4rem; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:1.2rem 1.4rem; margin:1rem 0; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:1rem; }
+.grid .card h3 { margin-top:0; color:var(--accent); font-size:1rem; }
+.shot { margin:2rem 0; }
+.shot img { width:100%; border:1px solid var(--line); border-radius:8px; }
+.shot p { color:var(--dim); font-size:.9rem; margin:.5rem 0 0; }
+pre { background:#0b0d10; border:1px solid var(--line); border-radius:8px; padding:1rem; overflow-x:auto; font-size:.88rem; }
+code { color:var(--ok); }
+.diagram { font-family:monospace; white-space:pre; font-size:.82rem; line-height:1.5; }
+footer { text-align:center; color:var(--dim); padding:2rem; font-size:.85rem; }
+footer a { color:var(--dim); }
+a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<div class="hero">
+<h1>Tail<span>relay</span></h1>
+<p class="tag">An extremely lightweight WireGuard server for your VPS, bridged into your Tailscale tailnet — managed from a tiny web UI. WireGuard-only devices ride your tailnet, including its exit nodes.</p>
+<div class="btns">
+<a href="https://github.com/TamTunnel/TailRelay">GitHub</a>
+<a class="ghost" href="https://github.com/TamTunnel/TailRelay#quick-start">Quick start</a>
+</div>
+</div>
+
+<div class="stats">
+<div class="stat"><b>~14 MB</b><span>static binary</span></div>
+<div class="stat"><b>~12 MB</b><span>Docker image</span></div>
+<div class="stat"><b>0</b><span>runtime dependencies</span></div>
+<div class="stat"><b>Apache-2.0</b><span>license</span></div>
+</div>
+
+<h2>What it does</h2>
+<div class="grid">
+<div class="card"><h3>WireGuard server, managed</h3>Generates server keys and configs, enrolls clients with one click, auto-assigns IPs from your pool, and serves per-client <code>.conf</code> downloads plus QR codes.</div>
+<div class="card"><h3>Tailscale bridge</h3>Bridges the WireGuard network into your tailnet. Pick a Tailscale exit node and every WireGuard client relays through it — no Tailscale client needed on the device.</div>
+<div class="card"><h3>Kill switch</h3>Optional fail-closed DROP: if <code>tailscaled</code> dies on the VPS, client traffic is dropped — never leaked via the VPS's real IP. Toggleable, on by default, with live status.</div>
+<div class="card"><h3>Dual-stack IPv6</h3>WG Easy-style: a random ULA <code>/64</code> is generated on first run, clients get <code>::2</code>, <code>::3</code>…, alongside their IPv4 addresses.</div>
+<div class="card"><h3>Sane access model</h3>Binds to your Tailscale IP by default — your tailnet <em>is</em> the login. Optionally bind anywhere with password + TLS.</div>
+<div class="card"><h3>Never auto-reroutes</h3>A dead exit node fails closed (traffic stops, location never silently changes). Recovery is always your explicit choice.</div>
+</div>
+
+<h2>The web UI</h2>
+<div class="shot">
+<img src="dashboard.png" alt="Tailrelay dashboard: WireGuard peers, kill switch status, Tailscale bridge">
+<p><b>Dashboard</b> — WireGuard peers with live handshake stats, kill-switch state ("Paused — Tailscale down" here, because this demo has no tailnet), and the Tailscale bridge panel.</p>
+</div>
+<div class="shot">
+<img src="clients.png" alt="Tailrelay clients page: QR codes and config downloads">
+<p><b>Clients</b> — one-click enrollment, QR codes for mobile apps, <code>.conf</code> downloads, rename and instant revocation.</p>
+</div>
+<div class="shot">
+<img src="settings.png" alt="Tailrelay settings page">
+<p><b>Settings</b> — IP pools (v4 + v6), DNS/MTU/keepalive, advertised routes, exit-node selection, kill-switch toggle, bind address and TLS.</p>
+</div>
+
+<h2>Run it</h2>
+<div class="card">
+<pre><code>docker run -d --name tailrelay --network host --cap-add NET_ADMIN \
+  -v /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock \
+  -v tailrelay-state:/var/lib/tailrelay \
+  ghcr.io/tamtunnel/tailrelay:latest</code></pre>
+<p>Or grab the static binary from <a href="https://github.com/TamTunnel/TailRelay">GitHub</a> and run it with systemd — <code>tailscaled</code> must already be installed and logged in. Full docs in the <a href="https://github.com/TamTunnel/TailRelay#quick-start">README</a>.</p>
+</div>
+
+<h2>How traffic flows</h2>
+<div class="card"><div class="diagram">phone/laptop (WireGuard only)
+        │  wg0, 10.7.0.0/24 + ULA fd00::/64
+        ▼
+┌─────────────── VPS ────────────────┐
+│  Tailrelay  →  tailscale0          │──▶ tailnet ──▶ your chosen exit node ──▶ internet
+│  (kill switch: DROP if tailscaled   │
+│   dies — never leaks via VPS WAN)  │
+└────────────────────────────────────┘</div></div>
+
+<footer>
+Tailrelay · Apache-2.0 · by <a href="https://github.com/TamTunnel">TamTunnel</a> · inspired by <a href="https://github.com/juhovh/tailguard">juhovh/tailguard</a>
+</footer>
+</main>
+</body>
+</html>
