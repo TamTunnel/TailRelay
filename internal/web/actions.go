@@ -136,6 +136,14 @@ type dashboardData struct {
 	TS        ts.Status
 	Routes    string
 	ExitNodes []ts.ExitNode
+	// ExitNodeWarning is set when a pinned exit node is down or not
+	// active: relayed traffic is fail-closed (stopped), recovery manual.
+	ExitNodeWarning string
+	// Kill-switch status: label + pill class ("ok"/"warn"), plus a leak
+	// note when the switch is off.
+	KillSwitchLabel    string
+	KillSwitchPill     string
+	KillSwitchLeakNote bool
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -179,22 +187,64 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(data.Peers, func(i, j int) bool { return data.Peers[i].Name < data.Peers[j].Name })
 
+	tsHealthy := false // tailscaled up AND the tailscale interface exists
 	if tstat, terr := ts.GetStatus(ctx, s.d.TS); terr == nil {
 		data.TS = *tstat
 		data.Routes = st.Settings.Routes
 		if tstat.Running {
+			tsHealthy = s.d.WG.TSIfaceExists(ctx)
 			selected := tstat.ExitNodeName
 			if selected == "" {
 				selected = st.Settings.ExitNode // fall back to the stored choice
 			}
 			if nodes, nerr := ts.ExitNodes(ctx, s.d.TS, selected); nerr == nil {
+				// The --json list path marks every candidate online; the
+				// status payload is authoritative for the *selected* node's
+				// real state (it knows when the pinned node went down).
+				for i := range nodes {
+					if nodes[i].Selected {
+						nodes[i].Online = tstat.UsingExitNode
+					}
+				}
 				data.ExitNodes = nodes
+				data.ExitNodeWarning = exitNodeWarning(st.Settings.ExitNode, nodes)
 			}
 		}
 	} else {
 		data.TS.BackendState = "unreachable"
 	}
+	// Kill-switch status: on+healthy = tunneling; on+down = paused
+	// (traffic dropped, not leaked); off = leak risk, said plainly.
+	switch {
+	case st.Settings.KillSwitch && tsHealthy:
+		data.KillSwitchLabel, data.KillSwitchPill = "Active & tunneling", "ok"
+	case st.Settings.KillSwitch:
+		data.KillSwitchLabel, data.KillSwitchPill = "Paused — Tailscale down", "warn"
+	default:
+		data.KillSwitchLabel, data.KillSwitchPill = "Kill switch off", "warn"
+		data.KillSwitchLeakNote = true
+	}
 	s.render(w, "dashboard.html", data)
+}
+
+// exitNodeWarning reports a fail-closed warning when an exit node is
+// pinned but not actively relaying: the node went offline (traffic is
+// stopped — never silently rerouted to another node, which would change
+// egress IP/location) or it vanished from the candidate list. "" means
+// healthy, or no pin set. Recovery is always manual via the picker.
+func exitNodeWarning(pin string, nodes []ts.ExitNode) string {
+	if pin == "" {
+		return ""
+	}
+	for _, n := range nodes {
+		if n.Selected {
+			if n.Online {
+				return ""
+			}
+			return fmt.Sprintf("exit node %q is OFFLINE — WireGuard traffic is fail-closed (stopped, not rerouted). Pick another node below to restore the relay; recovery is manual by design", n.Hostname)
+		}
+	}
+	return fmt.Sprintf("pinned exit node %q is not active — traffic is fail-closed (stopped). Pick a node below to restore the relay", pin)
 }
 
 // --- clients ---
@@ -401,6 +451,8 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		ListenPort:       listenPort,
 		Endpoint:         strings.TrimSpace(r.FormValue("endpoint")),
 		ClientAllowedIPs: strings.TrimSpace(r.FormValue("client_allowed_ips")),
+		// Unchecked checkboxes don't submit — absence means off.
+		KillSwitch: r.FormValue("kill_switch") == "1",
 	}
 	if _, _, err := net.ParseCIDR(ns.PoolCIDR); err != nil {
 		redirectErr(w, r, "/settings", fmt.Errorf("bad pool CIDR: %w", err))
@@ -465,6 +517,13 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleExitNode(w http.ResponseWriter, r *http.Request) {
 	node := strings.TrimSpace(r.FormValue("node"))
+	// Pin by MagicDNS name only, never by tailnet IP: an `auto:any`-style
+	// or IP-based pin would let egress silently hop between nodes. The
+	// picker only offers concrete names; reject anything else outright.
+	if node != "" && net.ParseIP(node) != nil {
+		redirectErr(w, r, "/", fmt.Errorf("exit node must be a tailnet hostname, not an IP address"))
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	if err := ts.SetExitNode(ctx, s.d.TS, node); err != nil {
@@ -509,7 +568,11 @@ func (s *Server) handleTailscaleUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := ts.Up(r.Context(), s.d.TS, authKey, hostname); err != nil {
-		redirectErr(w, r, "/", fmt.Errorf("tailscale up: %w", err))
+		// Belt-and-braces: never echo the raw CLI error into the ?err=
+		// redirect. Even with --authkey redacted by the runner, secrets
+		// have no business in URLs, browser history, or proxy logs.
+		log.Printf("tailscale up failed: %v", err)
+		redirectErr(w, r, "/", fmt.Errorf("tailscale up failed — check that tailscaled is running and the auth key is valid"))
 		return
 	}
 	redirectMsg(w, r, "/", "tailscale is up")
