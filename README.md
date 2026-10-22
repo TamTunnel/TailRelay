@@ -166,7 +166,7 @@ We ship both, but they aren't equal:
 |---|---|---|
 | Overhead | none | container runtime, image pull |
 | Needs | root once at install | `NET_ADMIN`, host networking, `/dev/net/tun`, Tailscale socket + CLI mounts |
-| Tailscale access | native (host `tailscaled`) | via mounted `/var/run/tailscale/tailscaled.sock` |
+| Tailscale access | native (host `tailscaled`) | via mounted `/var/run/tailscale/` dir |
 | Best for | a VPS you control | fleets / immutable infra |
 
 Honest take: on a single VPS, the binary is simpler and lighter — Docker buys you nothing except packaging familiarity, while adding socket-mount fragility. Use Docker if your workflow is already container-based; otherwise take the binary.
