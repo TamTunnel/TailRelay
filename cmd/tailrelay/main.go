@@ -118,22 +118,6 @@ func ensureState(ctx context.Context, cfg *config.Config, store *state.Store) (*
 		Settings:         state.DefaultSettings(),
 		Clients:          []state.Client{},
 	}
-	// Dual-stack by default (WG Easy-style): every install gets its own
-	// random ULA /64, or the TR_IPV6_POOL override. Empty is not reachable
-	// here — clearing the pool (disabling IPv6) happens in the Settings UI.
-	v6pool := strings.TrimSpace(cfg.InitialIPv6Pool)
-	if v6pool == "" {
-		var err error
-		v6pool, err = state.RandomULAPool()
-		if err != nil {
-			return nil, err
-		}
-		log.Printf("generated IPv6 ULA pool %s", v6pool)
-	} else if !state.ValidIPv6Pool(v6pool) {
-		return nil, fmt.Errorf("invalid TR_IPV6_POOL %q: must be an IPv6 CIDR", cfg.InitialIPv6Pool)
-	}
-	st.Settings.IPv6Pool = v6pool
-	st.Settings.ClientAllowedIPs = "0.0.0.0/0, ::/0"
 	if ep := strings.TrimSpace(cfg.InitialEndpoint); ep != "" {
 		if strings.ContainsAny(ep, " \t\r\n") {
 			log.Printf("warning: ignoring invalid TR_ENDPOINT %q (must be host or host:port)", ep)
