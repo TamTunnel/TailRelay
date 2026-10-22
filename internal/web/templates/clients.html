@@ -13,7 +13,7 @@
 
 {{range .Clients}}
 <section class="card client">
-<h2><code>{{.Name}}</code> <span class="dim">{{.Address}} · added {{.Created}}</span></h2>
+<h2><code>{{.Name}}</code> <span class="dim">{{.Address}}{{if .AddressV6}}, {{.AddressV6}}{{end}} · added {{.Created}}</span></h2>
 <div class="client-grid">
 <div>
 <img src="/qr/{{.Name}}" alt="QR code for {{.Name}}" width="220" height="220">

@@ -27,6 +27,9 @@ type Config struct {
 	// InitialEndpoint pre-seeds the client-facing endpoint on first run,
 	// skipping the api.ipify.org auto-detection (see README "Privacy").
 	InitialEndpoint string
+	// InitialIPv6Pool pre-seeds the IPv6 ULA pool on first run. Empty means
+	// "generate a random ULA /64". Validation happens in ensureState.
+	InitialIPv6Pool string
 	// TLSCert/TLSKey enable HTTPS for the web UI. Both must be set together;
 	// public (0.0.0.0) binds without TLS expose the password in cleartext.
 	TLSCert string
@@ -77,6 +80,7 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 	iface := fs.String("iface", "", "wireguard interface name")
 	tsIface := fs.String("ts-iface", "", "tailscale interface name for NAT (default tailscale0)")
 	endpoint := fs.String("endpoint", "", "initial public endpoint host[:port]; skips ipify auto-detection")
+	ipv6pool := fs.String("ipv6-pool", "", "initial IPv6 ULA pool CIDR (default: random fd..::/64); empty value handling is in ensureState")
 	tlsCert := fs.String("tls-cert", "", "TLS certificate file for the web UI (requires -tls-key)")
 	tlsKey := fs.String("tls-key", "", "TLS private key file for the web UI (requires -tls-cert)")
 	if err := fs.Parse(args); err != nil {
@@ -117,6 +121,7 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 	c.Iface = getenv(*iface, "TR_IFACE", DefaultIface)
 	c.TailscaleIface = getenv(*tsIface, "TR_TAILSCALE_IFACE", DefaultTailscaleIface)
 	c.InitialEndpoint = getenv(*endpoint, "TR_ENDPOINT", "")
+	c.InitialIPv6Pool = strings.TrimSpace(getenv(*ipv6pool, "TR_IPV6_POOL", ""))
 	c.TLSCert = getenv(*tlsCert, "TR_TLS_CERT", "")
 	c.TLSKey = getenv(*tlsKey, "TR_TLS_KEY", "")
 	if (c.TLSCert == "") != (c.TLSKey == "") {
@@ -176,6 +181,7 @@ func ListenEnvHint() string {
 		"TR_IFACE         wireguard interface name (default wg0)",
 		"TR_TAILSCALE_IFACE tailscale interface NAT target (default tailscale0)",
 		"TR_ENDPOINT      initial endpoint host[:port]; skips the ipify.org lookup on first run",
+		"TR_IPV6_POOL     initial IPv6 ULA pool CIDR on first run (default: random fd..::/64)",
 		"TR_TLS_CERT      TLS certificate file for the web UI (needs TR_TLS_KEY)",
 		"TR_TLS_KEY       TLS private key file for the web UI (needs TR_TLS_CERT)",
 	}, "\n")
