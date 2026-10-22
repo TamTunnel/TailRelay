@@ -1,6 +1,11 @@
 package web
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/TamTunnel/Tailrelay/internal/ts"
+)
 
 func TestValidEndpoint(t *testing.T) {
 	for _, ok := range []string{"", "vpn.example.com", "vpn.example.com:51820", "203.0.113.10", "203.0.113.10:51820"} {
@@ -38,5 +43,32 @@ func TestValidAllowedIPs(t *testing.T) {
 		if validAllowedIPs(bad) {
 			t.Errorf("validAllowedIPs(%q) = true, want false", bad)
 		}
+	}
+}
+
+func TestExitNodeWarning(t *testing.T) {
+	nodes := func() []ts.ExitNode {
+		return []ts.ExitNode{
+			{Hostname: "exit-1", IP: "100.64.0.2", Online: true, Selected: true},
+			{Hostname: "exit-2", IP: "100.64.0.3", Online: true},
+		}
+	}
+	if w := exitNodeWarning("", nodes()); w != "" {
+		t.Errorf("no pin: got %q, want empty", w)
+	}
+	if w := exitNodeWarning("exit-1", nodes()); w != "" {
+		t.Errorf("healthy pin: got %q, want empty", w)
+	}
+	down := nodes()
+	down[0].Online = false
+	w := exitNodeWarning("exit-1", down)
+	if w == "" || !strings.Contains(w, "OFFLINE") || !strings.Contains(w, "fail-closed") {
+		t.Errorf("offline pin: got %q, want fail-closed OFFLINE warning", w)
+	}
+	gone := nodes()
+	gone[0].Selected = false
+	w = exitNodeWarning("exit-1", gone)
+	if w == "" || !strings.Contains(w, "not active") {
+		t.Errorf("vanished pin: got %q, want not-active warning", w)
 	}
 }

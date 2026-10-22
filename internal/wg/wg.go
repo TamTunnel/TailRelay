@@ -246,13 +246,20 @@ type NetOps struct {
 	TSIface string // tailscale interface NAT target, e.g. tailscale0
 }
 
+// TSIfaceExists reports whether the tailscale interface exists
+// (used by the dashboard to derive Tailscale health).
+func (n *NetOps) TSIfaceExists(ctx context.Context) bool {
+	if n.TSIface == "" {
+		return false
+	}
+	_, err := n.Run(ctx, "ip", "link", "show", "dev", n.TSIface)
+	return err == nil
+}
+
 // Apply writes wg0.conf and brings the interface + NAT up. Idempotent.
 func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) error {
-	if n.TSIface == "" {
-		return fmt.Errorf("tailscale interface name is empty")
-	}
-	if _, err := n.Run(ctx, "ip", "link", "show", "dev", n.TSIface); err != nil {
-		return fmt.Errorf("tailscale interface %q not found (is tailscaled running?): %w", n.TSIface, err)
+	if !n.TSIfaceExists(ctx) {
+		return fmt.Errorf("tailscale interface %q not found (is tailscaled running?)", n.TSIface)
 	}
 	conf, err := RenderServerConfig(st, n.Iface)
 	if err != nil {
@@ -290,7 +297,7 @@ func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) er
 	if err := n.enableForwarding(ctx); err != nil {
 		return err
 	}
-	return n.ensureNAT(ctx, st.Settings.PoolCIDR)
+	return n.ensureNAT(ctx, st.Settings.PoolCIDR, st.Settings.KillSwitch)
 }
 
 func (n *NetOps) enableForwarding(ctx context.Context) error {
@@ -305,7 +312,16 @@ func (n *NetOps) enableForwarding(ctx context.Context) error {
 
 // ensureNAT installs the FORWARD + MASQUERADE rules wg0 -> <ts-iface>.
 // Rules are checked with -C first so Apply stays idempotent.
-func (n *NetOps) ensureNAT(ctx context.Context, poolCIDR string) error {
+//
+// The kill-switch rule is the fail-closed policy: anything arriving on the
+// WireGuard interface that is NOT headed for the tailscale interface is
+// dropped. If tailscaled crashes (tailscale0 vanishes) or the pinned exit
+// node dies, client traffic stops instead of leaking out the VPS's direct
+// WAN. The DROP is appended after the ACCEPTs so legitimate relay traffic
+// still matches first; on every re-Apply it stays last. With killSwitch
+// off the rule is removed if present (Apply reconciles it from the setting
+// every run).
+func (n *NetOps) ensureNAT(ctx context.Context, poolCIDR string, killSwitch bool) error {
 	tsif := n.TSIface
 	rules := [][]string{
 		{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
@@ -322,6 +338,25 @@ func (n *NetOps) ensureNAT(ctx context.Context, poolCIDR string) error {
 			if _, err := n.Run(ctx, "iptables", adds[i]...); err != nil {
 				return fmt.Errorf("iptables %s: %w", strings.Join(adds[i], " "), err)
 			}
+		}
+	}
+	dropSpec := []string{"FORWARD", "-i", n.Iface, "!", "-o", tsif, "-j", "DROP"}
+	withFlag := func(flag string) []string {
+		spec := make([]string, 0, len(dropSpec)+1)
+		return append(append(spec, flag), dropSpec...)
+	}
+	if killSwitch {
+		if _, err := n.Run(ctx, "iptables", withFlag("-C")...); err != nil {
+			if _, err := n.Run(ctx, "iptables", withFlag("-A")...); err != nil {
+				return fmt.Errorf("iptables kill-switch: %w", err)
+			}
+		}
+		return nil
+	}
+	// Kill switch off: remove the DROP if it's there, so traffic flows.
+	if _, err := n.Run(ctx, "iptables", withFlag("-C")...); err == nil {
+		if _, err := n.Run(ctx, "iptables", withFlag("-D")...); err != nil {
+			return fmt.Errorf("iptables remove kill-switch: %w", err)
 		}
 	}
 	return nil
