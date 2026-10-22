@@ -533,6 +533,16 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 			[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE"},
 			[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE"})
 	}
+	// When using a Tailscale exit node, the WireGuard server's own UDP
+	// responses must bypass the exit node and go direct via WAN.
+	// Otherwise the handshake response gets routed through the exit node
+	// and the client never sees it (wrong source path).
+	// Tailscale uses fwmark 0x80000/0xff0000 to bypass (ip rule 5210).
+	if s.ExitNode != "" {
+		addPair("iptables",
+			[]string{"-t", "mangle", "-C", "OUTPUT", "-p", "udp", "--sport", port, "-j", "MARK", "--set-mark", "0x80000"},
+			[]string{"-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--sport", port, "-j", "MARK", "--set-mark", "0x80000"})
+	}
 	for _, p := range pairs {
 		if _, err := n.Run(ctx, p.bin, p.check...); err != nil {
 			if _, err := n.Run(ctx, p.bin, p.add...); err != nil {
