@@ -25,14 +25,11 @@ services:
       net.ipv4.ip_forward: 1
       net.ipv6.conf.all.forwarding: 1
     volumes:
-      # persisted state (private keys!). wg0.conf is regenerated from state
-      # on every start — do NOT bind-mount it (Docker would create it as a
-      # directory if absent and break the interface apply).
+      # persisted state (private keys!) and generated wg0.conf
       - tailrelay-state:/var/lib/tailrelay
-      # talk to the HOST's tailscaled; mount the directory (not the socket
-      # file) so a tailscaled restart doesn't leave a stale mount behind.
-      # Mount the host CLI so versions match.
-      - /var/run/tailscale:/var/run/tailscale
+      - ./wg0.conf:/etc/wireguard/wg0.conf
+      # talk to the HOST's tailscaled; mount the host CLI so versions match
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
       - /usr/bin/tailscale:/usr/local/bin/tailscale:ro
     environment:
       # default: bind to the tailnet IP only (no password needed).
