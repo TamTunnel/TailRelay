@@ -317,3 +317,18 @@ func TestEnsureNATExitNodeModeNoWANRules(t *testing.T) {
 		t.Errorf("exit-node mode with kill switch should keep DROP:\n%s", joined)
 	}
 }
+
+func TestEnsureNATAddsInputRuleForWGPort(t *testing.T) {
+	f := &natFake{checkFails: true}
+	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+	s := v4Settings(true)
+	s.ListenPort = 51820
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	want := "iptables -A INPUT -p udp --dport 51820 -j ACCEPT"
+	if !strings.Contains(joined, want) {
+		t.Errorf("missing INPUT ACCEPT for WireGuard port, want %q in:\n%s", want, joined)
+	}
+}
