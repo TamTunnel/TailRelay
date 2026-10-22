@@ -20,6 +20,10 @@
 <label>Client AllowedIPs
 <input name="client_allowed_ips" value="{{.S.ClientAllowedIPs}}" required></label>
 <p class="dim"><code>0.0.0.0/0</code> routes all client IPv4 traffic through this VPS and the chosen Tailscale exit node. The server is IPv4-only — adding <code>::/0</code> would blackhole client IPv6 traffic.</p>
+<label><input type="checkbox" name="kill_switch" value="1" {{if .S.KillSwitch}}checked{{end}}>
+Kill Switch (Pause when Tailscale is down)</label>
+<p class="dim">When on, a firewall rule drops any WireGuard traffic that isn't headed for the Tailscale interface — so a dead exit node or a crashed tailscaled fails closed (traffic stops) instead of leaking out the VPS's direct WAN. Default: on.</p>
+{{if not .S.KillSwitch}}<p class="banner warn">Warning: with the kill switch off, WireGuard client traffic could leak via the VPS's direct WAN (exposing your real IP) if tailscaled crashes. Leave it on unless you know what you're doing.</p>{{end}}
 <button type="submit">Save &amp; re-apply WireGuard</button>
 </form>
 </section>
