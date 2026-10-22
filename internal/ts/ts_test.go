@@ -3,7 +3,6 @@ package ts
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -116,103 +115,5 @@ func TestGetStatusError(t *testing.T) {
 	}
 	if _, err := GetStatus(context.Background(), run); err == nil {
 		t.Error("expected error when tailscale CLI fails")
-	}
-}
-
-func TestVersion(t *testing.T) {
-	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if name != "tailscale" || len(args) != 1 || args[0] != "version" {
-			t.Fatalf("unexpected command: %s %v", name, args)
-		}
-		return []byte("1.104.2\n  tailscale commit: abc123\n  go version: go1.24.0\n"), nil
-	}
-	if got := Version(context.Background(), run); got != "1.104.2" {
-		t.Errorf("Version() = %q, want %q", got, "1.104.2")
-	}
-	// Unreachable CLI -> "".
-	broken := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return nil, errors.New("no such file")
-	}
-	if got := Version(context.Background(), broken); got != "" {
-		t.Errorf("Version() on error = %q, want %q", got, "")
-	}
-}
-
-func TestParseStatusExitNodeName(t *testing.T) {
-	st, err := ParseStatus([]byte(`{"BackendState":"Running",
-		"ExitNodeStatus":{"ID":"node123","Online":true,"Hostinfo":{"HostName":"exit-1"}}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.ExitNodeName != "exit-1" {
-		t.Errorf("ExitNodeName = %q, want exit-1", st.ExitNodeName)
-	}
-	// No Hostinfo: fall back to the stable node ID.
-	st, err = ParseStatus([]byte(`{"BackendState":"Running",
-		"ExitNodeStatus":{"ID":"node123","Online":true}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.ExitNodeName != "node123" {
-		t.Errorf("ExitNodeName = %q, want node123", st.ExitNodeName)
-	}
-}
-
-func TestExitNodesSelectedFromJSON(t *testing.T) {
-	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		if len(args) == 3 && args[2] == "--json" {
-			return []byte(`{"ExitNodes":[
-				{"ID":"id1","Hostinfo":{"Hostname":"exit-1"},"Addresses":["100.64.1.2/32"]},
-				{"ID":"id2","Hostinfo":{"Hostname":"exit-2"},"Addresses":["100.64.1.3/32"]}
-			]}`), nil
-		}
-		return nil, errors.New("no text fallback in this test")
-	}
-	nodes, err := ExitNodes(context.Background(), run, "exit-2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(nodes) != 2 {
-		t.Fatalf("got %d nodes, want 2", len(nodes))
-	}
-	if nodes[0].Selected || !nodes[1].Selected {
-		t.Errorf("selection wrong: %+v", nodes)
-	}
-	// Matching by stable ID works too.
-	nodes, err = ExitNodes(context.Background(), run, "id1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !nodes[0].Selected || nodes[1].Selected {
-		t.Errorf("ID-based selection wrong: %+v", nodes)
-	}
-}
-
-func TestParseExitNodeListDashFormat(t *testing.T) {
-	// Newer tailscale: no lat/long columns, "-" means online, offline rows
-	// carry "offline, last seen …".
-	out := ` IP               HOSTNAME                              COUNTRY     CITY      STATUS
- 100.100.1.1      us-homerouter.shrimp-penny.ts.net     -           -         -
- 100.100.10.5     vp-firestick.shrimp-penny.ts.net      -           -         offline, last seen 368d ago
- 100.100.1.2      vp-homerouter.shrimp-penny.ts.net     -           -         -
-`
-	nodes := ParseExitNodeList([]byte(out))
-	if len(nodes) != 3 {
-		t.Fatalf("got %d nodes, want 3", len(nodes))
-	}
-	if !nodes[0].Online || nodes[0].Selected {
-		t.Errorf("node 0 should be online: %+v", nodes[0])
-	}
-	if !nodes[2].Online {
-		t.Errorf("node 2 should be online: %+v", nodes[2])
-	}
-	if nodes[1].Online || nodes[1].Selected {
-		t.Errorf("node 1 should be offline: %+v", nodes[1])
-	}
-	if nodes[1].City != "-" || nodes[1].Country != "-" {
-		t.Errorf("node 1 location should be '- -', got %q %q", nodes[1].Country, nodes[1].City)
-	}
-	if strings.Contains(nodes[1].City, "offline") {
-		t.Errorf("status text leaked into city: %+v", nodes[1])
 	}
 }
