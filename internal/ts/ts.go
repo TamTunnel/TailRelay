@@ -93,30 +93,67 @@ func IP4(ctx context.Context, run Runner) string {
 	return strings.TrimSpace(string(out))
 }
 
-// ParseExitNodeList parses `tailscale exit-node list` text output:
+// ParseExitNodeList parses `tailscale exit-node list` text output. Two
+// formats exist in the wild:
 //
-//	# IP              HOSTNAME  COUNTRY  CITY      LATITUDE  LONGITUDE  STATUS
-//	100.64.1.2        exit-1    US       New York  40.7      -74.0      online
+//	# IP              HOSTNAME  COUNTRY  CITY       LATITUDE  LONGITUDE  STATUS      (older)
+//	100.64.1.2        exit-1    US       New York   40.7      -74.0      online
+//
+//	 IP               HOSTNAME                              COUNTRY     CITY      STATUS            (newer)
+//	 100.100.20.7      home-router.example-net.ts.net     -           -         -
+//	 100.100.20.6     media-player.example-net.ts.net      -           -         offline, last seen 368d ago
+//
+// The STATUS column is located via the header's character offset (it is the
+// last column, so trailing whitespace is harmless). Status meanings: "-",
+// "online" and "selected" are online; anything else (including
+// "offline, last seen …") is offline.
 func ParseExitNodeList(data []byte) []ExitNode {
 	var nodes []ExitNode
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "IP ") {
+	lines := strings.Split(string(data), "\n")
+	statusOff, hasLatLong := -1, false
+	for _, line := range lines {
+		t := strings.TrimSpace(line)
+		if t == "" {
 			continue
 		}
-		f := strings.Fields(line)
-		if len(f) < 3 {
+		if statusOff < 0 && strings.Contains(t, "STATUS") {
+			// Header row (old format starts with "#"): locate STATUS by
+			// character offset; note whether LATITUDE/LONGITUDE columns
+			// sit between CITY and STATUS.
+			statusOff = strings.Index(line, "STATUS")
+			hasLatLong = strings.Contains(t, "LATITUDE")
+			continue
+		}
+		if strings.HasPrefix(t, "#") {
+			continue
+		}
+		f := strings.Fields(t)
+		if len(f) < 2 || strings.EqualFold(f[0], "IP") {
 			continue
 		}
 		n := ExitNode{IP: f[0], Hostname: f[1]}
-		status := strings.ToLower(f[len(f)-1])
-		n.Online = status == "online" || status == "selected"
-		n.Selected = status == "selected"
-		// Columns: IP HOSTNAME COUNTRY CITY... LATITUDE LONGITUDE STATUS
-		// (city may be multi-word, so count back from the end).
-		if len(f) >= 6 {
+		var status string
+		if statusOff >= 0 && statusOff < len(line) {
+			status = strings.TrimSpace(line[statusOff:])
+		} else {
+			status = f[len(f)-1]
+		}
+		switch sl := strings.ToLower(status); sl {
+		case "-", "online", "selected":
+			n.Online = true
+			n.Selected = sl == "selected"
+		}
+		// Country/city are the fields between hostname and status
+		// (minus lat/long when that format carries them).
+		if len(f) >= 3 {
 			n.Country = f[2]
-			n.City = strings.Join(f[3:len(f)-3], " ")
+			end := len(f) - len(strings.Fields(status))
+			if hasLatLong {
+				end -= 2
+			}
+			if end > 3 {
+				n.City = strings.Join(f[3:end], " ")
+			}
 		}
 		nodes = append(nodes, n)
 	}
