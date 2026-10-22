@@ -17,6 +17,9 @@ type natFake struct {
 }
 
 func (f *natFake) run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if name == "ip" {
+		return []byte("default via 10.0.0.1 dev ens3 proto dhcp metric 100\n"), nil
+	}
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 	isCheck := false
 	for _, a := range args {
@@ -55,7 +58,9 @@ func TestEnsureNATKillSwitchOn(t *testing.T) {
 	ctx := context.Background()
 	f := &natFake{checkFails: true} // rule absent
 	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
-	if err := n.ensureNAT(ctx, v4Settings(true)); err != nil {
+	s := v4Settings(true)
+	s.ExitNode = "exit-1" // DROP only applies with an exit node selected
+	if err := n.ensureNAT(ctx, s); err != nil {
 		t.Fatal(err)
 	}
 	adds := dropCalls(f.calls, "-A")
@@ -161,7 +166,9 @@ func TestEnsureNATDualStack(t *testing.T) {
 	ctx := context.Background()
 	f := &natFake{checkFails: true} // nothing present
 	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
-	if err := n.ensureNAT(ctx, dualSettings(true)); err != nil {
+	s := dualSettings(true)
+	s.ExitNode = "exit-1" // DROP only applies with an exit node selected
+	if err := n.ensureNAT(ctx, s); err != nil {
 		t.Fatal(err)
 	}
 	// v6 MASQUERADE for the ULA pool.
@@ -246,5 +253,67 @@ func TestEnsureNATStaleV6DropRemoved(t *testing.T) {
 	dels := ip6Drops(f.calls, "-D")
 	if len(dels) != 1 || dels[0] != wantV6DropDel {
 		t.Errorf("stale v6 DROP -D = %v, want exactly [%s]", dels, wantV6DropDel)
+	}
+}
+
+func TestDetectWAN(t *testing.T) {
+	f := &natFake{}
+	n := &NetOps{Run: f.run}
+	wan, err := n.detectWAN(context.Background())
+	if err != nil {
+		t.Fatalf("detectWAN: %v", err)
+	}
+	if wan != "ens3" {
+		t.Fatalf("got %q, want ens3", wan)
+	}
+}
+
+func TestEnsureNATDirectModeAddsWANRules(t *testing.T) {
+	f := &natFake{checkFails: true}
+	// ip route reports ens3 as the default-route interface.
+	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ip" {
+			return []byte("default via 10.0.0.1 dev ens3 proto dhcp metric 100\n"), nil
+		}
+		return f.run(ctx, name, args...)
+	}
+	n := &NetOps{Run: run, Iface: "wg0", TSIface: "tailscale0"}
+	s := v4Settings(false) // kill switch off, no exit node
+	s.ExitNode = ""
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	for _, want := range []string{
+		"iptables -A FORWARD -i wg0 -o ens3 -j ACCEPT",
+		"iptables -A FORWARD -i ens3 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"iptables -t nat -A POSTROUTING -s 10.7.0.0/24 -o ens3 -j MASQUERADE",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing rule %q\ncalls:\n%s", want, joined)
+		}
+	}
+	// No kill-switch DROP installed in direct mode (only -C checks, no -A).
+	for _, c := range f.calls {
+		if strings.Contains(c, "-A FORWARD") && strings.Contains(c, "-j DROP") {
+			t.Errorf("direct mode must not install kill-switch DROP, got: %q", c)
+		}
+	}
+}
+
+func TestEnsureNATExitNodeModeNoWANRules(t *testing.T) {
+	f := &natFake{checkFails: true}
+	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+	s := v4Settings(true)
+	s.ExitNode = "home-router"
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	if strings.Contains(joined, "-o ens3") {
+		t.Errorf("exit-node mode must not add WAN rules:\n%s", joined)
+	}
+	if !strings.Contains(joined, "-i wg0 ! -o tailscale0 -j DROP") {
+		t.Errorf("exit-node mode with kill switch should keep DROP:\n%s", joined)
 	}
 }
