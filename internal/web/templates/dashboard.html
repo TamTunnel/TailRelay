@@ -24,7 +24,7 @@ pool <code>{{.WG.Pool}}</code> ·
 {{range .Peers}}
 <tr>
 <td><a href="/clients">{{.Name}}</a></td>
-<td><code>{{.Address}}</code></td>
+<td><code>{{.Address}}</code>{{if .AddressV6}}<br><code class="dim">{{.AddressV6}}</code>{{end}}</td>
 <td>{{if .LastHandshake}}{{.LastHandshake}}{{else}}<span class="dim">never</span>{{end}}</td>
 <td class="dim">{{.Rx}} ↓ / {{.Tx}} ↑</td>
 <td><a href="/conf/{{.Name}}">config</a> · <a href="/qr/{{.Name}}">QR</a></td>
