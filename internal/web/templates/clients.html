@@ -32,6 +32,11 @@
 <button class="danger" type="submit">Remove</button>
 </form>
 <p class="dim">Public key: <code class="key">{{.PublicKey}}</code></p>
+<details>
+<summary>Show config (copy/paste)</summary>
+<textarea readonly rows="12" cols="60" id="conf-{{.Name}}" style="width:100%;font-family:monospace">{{.Config}}</textarea>
+<p><button type="button" onclick="navigator.clipboard.writeText(document.getElementById('conf-{{.Name}}').value);this.textContent='Copied!';setTimeout(()=>this.textContent='Copy config',1500)">Copy config</button></p>
+</details>
 </div>
 </div>
 </section>
