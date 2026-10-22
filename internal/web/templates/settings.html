@@ -5,7 +5,7 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <label>Client IP pool (CIDR)
 <input name="pool_cidr" value="{{.S.PoolCIDR}}" required></label>
-<p class="dim">Server takes .1. Changing the pool does not renumber existing clients.</p>
+<p class="dim">Server takes .1. The pool can't be changed while clients exist — remove them first, then change it and re-add.</p>
 <label>DNS for clients
 <input name="dns" value="{{.S.DNS}}" required></label>
 <label>MTU
@@ -19,7 +19,7 @@
 <p class="dim">Leave empty to auto-detect the VPS public IP at startup; override here any time.</p>
 <label>Client AllowedIPs
 <input name="client_allowed_ips" value="{{.S.ClientAllowedIPs}}" required></label>
-<p class="dim"><code>0.0.0.0/0, ::/0</code> routes all client traffic through this VPS and the chosen Tailscale exit node.</p>
+<p class="dim"><code>0.0.0.0/0</code> routes all client IPv4 traffic through this VPS and the chosen Tailscale exit node. The server is IPv4-only — adding <code>::/0</code> would blackhole client IPv6 traffic.</p>
 <button type="submit">Save &amp; re-apply WireGuard</button>
 </form>
 </section>

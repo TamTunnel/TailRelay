@@ -2,6 +2,7 @@ package wg
 
 import (
 	"encoding/base64"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -204,4 +205,46 @@ func TestAddClient(t *testing.T) {
 		t.Error("expected empty-name error")
 	}
 	// Note: name *shape* (allowed characters) is validated in the web layer.
+}
+
+func TestNextClientIPMaskAware(t *testing.T) {
+	// /25: only .2-.126 usable; .127 is broadcast.
+	ip, err := NextClientIP("10.7.0.0/25", map[string]bool{})
+	if err != nil || ip != "10.7.0.2" {
+		t.Errorf("got %q, %v; want 10.7.0.2", ip, err)
+	}
+	taken := map[string]bool{}
+	for i := 2; i <= 126; i++ {
+		taken["10.7.0."+strconv.Itoa(i)] = true
+	}
+	if _, err := NextClientIP("10.7.0.0/25", taken); err == nil {
+		t.Error("expected exhaustion for full /25 (broadcast .127 must not be offered)")
+	}
+	// /16: allocation continues past .254 into the next /24.
+	taken16 := map[string]bool{}
+	for i := 2; i <= 254; i++ {
+		taken16["10.8.0."+strconv.Itoa(i)] = true
+	}
+	ip, err = NextClientIP("10.8.0.0/16", taken16)
+	if err != nil || ip != "10.8.0.255" {
+		t.Errorf("got %q, %v; want 10.8.0.255", ip, err)
+	}
+	// /31 is too small for server + client.
+	if _, err := NextClientIP("10.9.0.0/31", nil); err == nil {
+		t.Error("expected error for /31 pool")
+	}
+}
+
+func TestRedactArgs(t *testing.T) {
+	got := redactArgs([]string{"up", "--authkey=tskey-secret-123", "--hostname=vps"})
+	if got[1] != "--authkey=<redacted>" {
+		t.Errorf("authkey not redacted: %q", got[1])
+	}
+	if got[0] != "up" || got[2] != "--hostname=vps" {
+		t.Errorf("innocent args mangled: %q", got)
+	}
+	got = redactArgs([]string{"--AuthKey=xyz"})
+	if got[0] != "--AuthKey=<redacted>" {
+		t.Errorf("case-insensitive redact failed: %q", got[0])
+	}
 }
