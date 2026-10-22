@@ -10,22 +10,14 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o /tailrelay ./cmd/tailrelay
 
 # ---- run ----
-# Use the official Tailscale image as base: it ships a full Tailscale build
-# with kernel (TUN) mode support. The static binaries from pkgs.tailscale.com
-# are userspace-only, which breaks iptables forwarding + NAT for WireGuard
-# client traffic (userspace netstack doesn't handle forwarded packets).
-# TS_USERSPACE=false (set in entrypoint.sh) forces kernel mode.
-# The container runs its OWN tailscaled in the same network namespace as
-# WireGuard (tailguard-style isolation): the host's Tailscale — if any — is
-# never touched, and host routing is unaffected.
-FROM tailscale/tailscale:stable
-# Alpine-based (see https://github.com/tailscale/tailscale/blob/main/Dockerfile).
-# Already ships iptables, iproute2, ca-certificates. Add wireguard-tools for
-# the `wg` CLI used by TailRelay's NetOps.
-RUN apk add --no-cache wireguard-tools \
- && mkdir -p /var/lib/tailrelay /var/lib/tailscale /var/run/tailscale /etc/wireguard
+# alpine: tiny base with a package manager for the runtime tools tailrelay
+# shells out to (wg, ip, iptables). tailscaled itself runs on the HOST;
+# the container talks to it via the mounted socket + tailscale CLI.
+FROM alpine:3.21
+RUN apk add --no-cache wireguard-tools iproute2 iptables ca-certificates \
+    && mkdir -p /var/lib/tailrelay /etc/wireguard
 COPY --from=build /tailrelay /usr/local/bin/tailrelay
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+# tailscale CLI is mounted from the host at runtime (see docker-compose.yml)
+# so the version always matches the host's tailscaled.
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["/usr/local/bin/tailrelay"]
