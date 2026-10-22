@@ -117,3 +117,53 @@ func TestGetStatusError(t *testing.T) {
 		t.Error("expected error when tailscale CLI fails")
 	}
 }
+
+func TestParseStatusExitNodeName(t *testing.T) {
+	st, err := ParseStatus([]byte(`{"BackendState":"Running",
+		"ExitNodeStatus":{"ID":"node123","Online":true,"Hostinfo":{"HostName":"exit-1"}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ExitNodeName != "exit-1" {
+		t.Errorf("ExitNodeName = %q, want exit-1", st.ExitNodeName)
+	}
+	// No Hostinfo: fall back to the stable node ID.
+	st, err = ParseStatus([]byte(`{"BackendState":"Running",
+		"ExitNodeStatus":{"ID":"node123","Online":true}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ExitNodeName != "node123" {
+		t.Errorf("ExitNodeName = %q, want node123", st.ExitNodeName)
+	}
+}
+
+func TestExitNodesSelectedFromJSON(t *testing.T) {
+	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if len(args) == 3 && args[2] == "--json" {
+			return []byte(`{"ExitNodes":[
+				{"ID":"id1","Hostinfo":{"Hostname":"exit-1"},"Addresses":["100.64.1.2/32"]},
+				{"ID":"id2","Hostinfo":{"Hostname":"exit-2"},"Addresses":["100.64.1.3/32"]}
+			]}`), nil
+		}
+		return nil, errors.New("no text fallback in this test")
+	}
+	nodes, err := ExitNodes(context.Background(), run, "exit-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("got %d nodes, want 2", len(nodes))
+	}
+	if nodes[0].Selected || !nodes[1].Selected {
+		t.Errorf("selection wrong: %+v", nodes)
+	}
+	// Matching by stable ID works too.
+	nodes, err = ExitNodes(context.Background(), run, "id1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !nodes[0].Selected || nodes[1].Selected {
+		t.Errorf("ID-based selection wrong: %+v", nodes)
+	}
+}
