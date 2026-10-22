@@ -2,6 +2,8 @@
 
 **Turn a cheap VPS into a WireGuard VPN server whose traffic rides your Tailscale network — managed from a tiny web UI.**
 
+**[Live demo](https://tamtunnel.github.io/TailRelay/)** — screenshots of the real web UI.
+
 ## The problem, in plain language
 
 You have devices that can't run Tailscale (a travel router, a smart TV, a friend's laptop, an IoT box) but they *can* run WireGuard. You also have a Tailscale tailnet with exit nodes in the places you want your traffic to come out of. Today there's no simple glue between the two: either you hand-edit `wg0.conf` files and fight iptables, or you run a heavyweight VPN product.
