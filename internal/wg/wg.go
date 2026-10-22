@@ -486,6 +486,14 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	addPair := func(bin string, check, add []string) {
 		pairs = append(pairs, pair{bin: bin, check: check, add: add})
 	}
+	// Allow WireGuard UDP traffic through the host INPUT chain.
+	// Without this, a restrictive INPUT policy (e.g. REJECT all) drops
+	// handshake packets before they reach the WireGuard socket.
+	// The port comes from settings so custom ListenPort works too.
+	port := strconv.Itoa(s.ListenPort)
+	addPair("iptables",
+		[]string{"-C", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"},
+		[]string{"-A", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
 	addPair("iptables",
 		[]string{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
 		[]string{"-A", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})
@@ -630,14 +638,16 @@ func (n *NetOps) Dump(ctx context.Context) (map[string]PeerInfo, error) {
 		if len(f) < 8 {
 			continue // interface line (4 fields) or blank
 		}
-		hs, _ := strconv.ParseInt(f[5], 10, 64)
-		rx, _ := strconv.ParseUint(f[6], 10, 64)
-		tx, _ := strconv.ParseUint(f[7], 10, 64)
+		// Peer line fields: 0=public-key 1=preshared-key 2=endpoint 3=allowed-ips
+		// 4=latest-handshake 5=transfer-rx 6=transfer-tx 7=persistent-keepalive
+		hs, _ := strconv.ParseInt(f[4], 10, 64)
+		rx, _ := strconv.ParseUint(f[5], 10, 64)
+		tx, _ := strconv.ParseUint(f[6], 10, 64)
 		var hst time.Time
 		if hs > 0 {
 			hst = time.Unix(hs, 0)
 		}
-		peers[f[1]] = PeerInfo{PublicKey: f[1], Endpoint: f[3], LastHandshake: hst, RxBytes: rx, TxBytes: tx}
+		peers[f[0]] = PeerInfo{PublicKey: f[0], Endpoint: f[2], LastHandshake: hst, RxBytes: rx, TxBytes: tx}
 	}
 	return peers, nil
 }
