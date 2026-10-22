@@ -332,3 +332,33 @@ func TestEnsureNATAddsInputRuleForWGPort(t *testing.T) {
 		t.Errorf("missing INPUT ACCEPT for WireGuard port, want %q in:\n%s", want, joined)
 	}
 }
+
+func TestEnsureNATExitNodeAddsMangleBypass(t *testing.T) {
+	f := &natFake{checkFails: true}
+	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+	s := v4Settings(true)
+	s.ExitNode = "home-router"
+	s.ListenPort = 51820
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	want := "iptables -t mangle -A OUTPUT -p udp --sport 51820 -j MARK --set-mark 0x80000"
+	if !strings.Contains(joined, want) {
+		t.Errorf("exit-node mode must add mangle bypass for WG port, want %q in:\n%s", want, joined)
+	}
+}
+
+func TestEnsureNATDirectModeNoMangleBypass(t *testing.T) {
+	f := &natFake{checkFails: true}
+	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+	s := v4Settings(true)
+	s.ExitNode = "" // direct mode
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	if strings.Contains(joined, "mangle") {
+		t.Errorf("direct mode must not add mangle bypass:\n%s", joined)
+	}
+}
