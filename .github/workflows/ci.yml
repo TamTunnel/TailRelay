@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   go:
@@ -25,3 +26,79 @@ jobs:
         run: go vet ./...
       - name: test
         run: go test ./...
+
+  docker:
+    name: docker build, push, smoke test
+    runs-on: ubuntu-latest
+    needs: go
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/tamtunnel/tailrelay
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=tag
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ github.ref_name }}
+
+      - name: Smoke test container
+        run: |
+          set -e
+          docker build -t tailrelay:smoke .
+          docker run -d --name tr-smoke -p 8080:8080 \
+            -e TR_BIND_ADDR=0.0.0.0 \
+            -e TR_ADMIN_PASSWORD=smoke-test-password-123 \
+            -e TR_ENDPOINT=smoke.example.com:51820 \
+            tailrelay:smoke
+          code=""
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/login || true)
+            [ "$code" = "200" ] && break
+            sleep 2
+          done
+          echo "GET /login -> $code"
+          [ "$code" = "200" ]
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/)
+          echo "unauthenticated GET / -> $code"
+          [ "$code" = "303" ]
+
+          jar=$(mktemp)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -c "$jar" \
+            --data-urlencode 'password=smoke-test-password-123' \
+            http://127.0.0.1:8080/login)
+          echo "POST /login -> $code"
+          [ "$code" = "303" ]
+
+          code=$(curl -s -o /dev/null -w '%{http_code}' -b "$jar" http://127.0.0.1:8080/)
+          echo "authenticated GET / -> $code"
+          [ "$code" = "200" ]
+
+          body=$(curl -s -b "$jar" http://127.0.0.1:8080/)
+          echo "$body" | grep -qi "tailrelay" && echo "dashboard renders brand OK"
+
+          docker rm -f tr-smoke
+          rm -f "$jar"
+          echo "SMOKE TEST PASSED"
