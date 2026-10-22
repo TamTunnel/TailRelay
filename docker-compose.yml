@@ -1,12 +1,13 @@
-# Tailrelay in Docker — self-contained bridge appliance.
+# Tailrelay in Docker.
 #
-# The container runs its OWN tailscaled in the same network namespace as
-# WireGuard (tailguard-style isolation). The host does NOT need Tailscale
-# installed, and the host's network stack and host Tailscale (if any) are
-# never touched.
+# Requirements on the host:
+#   - tailscaled installed AND logged in (the container reuses the host daemon)
+#   - the tailscale CLI available to mount (usually /usr/bin/tailscale)
 #
-# Firewall: this uses bridge networking, so publish the ports below and
-# open UDP 51820 in your cloud firewall / security group (e.g. Oracle NSG).
+# The container needs host networking + NET_ADMIN because it creates the wg0
+# interface and iptables rules on the HOST network stack. There is no
+# meaningful isolation here by design — if you want isolation, use the
+# static binary instead (see README "Docker vs binary").
 services:
   tailrelay:
     build:
@@ -15,42 +16,27 @@ services:
         VERSION: "0.1.0"
     image: ghcr.io/tamtunnel/tailrelay:0.1.0
     container_name: tailrelay
+    network_mode: host
     cap_add:
       - NET_ADMIN
-      - SYS_MODULE # recommended by Tailscale docs for kernel networking
     devices:
       - /dev/net/tun:/dev/net/tun
     sysctls:
       net.ipv4.ip_forward: 1
       net.ipv6.conf.all.forwarding: 1
-    ports:
-      - "51820:51820/udp" # WireGuard — open this in your cloud firewall/NSG
-      # NOTE: do NOT publish 41641/udp if the host already runs Tailscale
-      # (port clash). The container's tailscaled works fine via DERP relays
-      # without it; direct connections are a latency optimization only.
-      - "8080:8080"       # web UI (also reachable via the container's tailnet IP)
     volumes:
-      # persisted state (private keys!). wg0.conf is regenerated from state
-      # on every start — do NOT bind-mount it (Docker would create it as a
-      # directory if absent and break the interface apply).
+      # persisted state (private keys!) and generated wg0.conf
       - tailrelay-state:/var/lib/tailrelay
-      # Tailscale identity (node keys, login state). Persisted so re-creates
-      # keep the same tailnet node instead of registering a new one.
-      - tailscale-state:/var/lib/tailscale
+      - ./wg0.conf:/etc/wireguard/wg0.conf
+      # talk to the HOST's tailscaled; mount the host CLI so versions match
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+      - /usr/bin/tailscale:/usr/local/bin/tailscale:ro
     environment:
-      # One-time Tailscale login for the container's own node. Generate at
-      # https://login.tailscale.com/admin/settings/keys (reusable or one-use).
-      # Omit to log in manually via the web UI (Tailscale section).
-      # - TS_AUTHKEY=tskey-auth-...
-      # - TS_HOSTNAME=tailrelay
-      # Web UI: default binds the container's tailnet IP (no password needed
-      # over the tailnet). To expose publicly, set TR_BIND_ADDR=0.0.0.0 AND TR_ADMIN_PASSWORD.
+      # default: bind to the tailnet IP only (no password needed).
+      # To expose publicly instead, set TR_BIND_ADDR=0.0.0.0 AND TR_ADMIN_PASSWORD.
       - TR_PORT=8080
       # - TR_ADMIN_PASSWORD=change-me
-      # Public IP:port WireGuard clients connect to (your VPS's public IP).
-      # - TR_ENDPOINT=203.0.113.1:51820
     restart: unless-stopped
 
 volumes:
   tailrelay-state:
-  tailscale-state:

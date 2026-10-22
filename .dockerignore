@@ -1,4 +1,4 @@
-/tailrelay
+tailrelay
 *.log
 /var/lib/tailrelay/
 state.json
