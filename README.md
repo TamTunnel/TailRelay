@@ -70,12 +70,31 @@ Everything network-related lives in the web UI (Settings page). Process-level co
 | `TR_IFACE` | `-iface` | `wg0` | WireGuard interface name |
 | `TR_TAILSCALE_IFACE` | `-ts-iface` | `tailscale0` | Tailscale interface the NAT rules target; startup fails loudly if it doesn't exist |
 | `TR_ENDPOINT` | `-endpoint` | *(none)* | Pre-seed the public endpoint on first run; skips the ipify.org auto-detection (see Privacy) |
+| `TR_TLS_CERT` | `-tls-cert` | *(none)* | TLS certificate file for the web UI (requires `TR_TLS_KEY`) |
+| `TR_TLS_KEY` | `-tls-key` | *(none)* | TLS private key file for the web UI (requires `TR_TLS_CERT`) |
 
-Security posture:
+## Security
 
-- Default bind is the Tailscale interface IPv4 — only devices on your tailnet can reach the UI, and tailnet identity is the gate. Binding `0.0.0.0` without `TR_ADMIN_PASSWORD` is a hard startup error.
-- With a password set: bcrypt-hashed (never stored), 12-hour session cookie (`HttpOnly`, `SameSite=Lax`), per-session CSRF tokens on every POST.
-- Tailscale auth keys entered in the UI are passed once to `tailscale up` and never written to disk. Caveat: the key travels on the command line, so it is briefly visible in the process list (`ps`) to local root while that command runs — unavoidable with the CLI, and it's never stored, logged, or included in error messages (secret-bearing args are redacted).
+Threat model, plainly stated:
+
+**The tailnet is the auth boundary (default mode).** Binding to the Tailscale interface means only devices on your tailnet can reach the UI — no password needed, tailnet identity is the gate. Consequence, by design: **any device on your tailnet can download every client's WireGuard private key** via the UI (`/conf/…`, `/qr/…`). If your tailnet includes devices you don't fully trust, don't use the default mode — bind `0.0.0.0` with `TR_ADMIN_PASSWORD` (mandatory; the process refuses to start without it) and put TLS in front (see below).
+
+**Public binds need TLS.** Without it, the admin password and session cookie travel in cleartext HTTP. Either pass `-tls-cert`/`-tls-key` (or `TR_TLS_CERT`/`TR_TLS_KEY`) so Tailrelay serves HTTPS directly — session/CSRF cookies then carry the `Secure` attribute — or terminate TLS in a reverse proxy in front of it.
+
+**Exit nodes never auto-switch.** A dead pinned exit node fails closed: Tailscale stops routing (it does not pick another node — `auto:any` is never offered in the picker), so WireGuard client traffic stops too. Recovery is manual: the dashboard shows a prominent warning banner naming the offline node, and you pick another one. Nodes are pinned by MagicDNS hostname, never by tailnet IP.
+
+**Kill switch (default: on).** Setting *Kill Switch (Pause when Tailscale is down)* installs a firewall rule that drops any WireGuard traffic not headed for the Tailscale interface (`-i wg0 ! -o tailscale0 -j DROP`, appended after the relay ACCEPTs). If `tailscaled` itself crashes and `tailscale0` vanishes, client traffic is dropped — it can never fall through to the VPS's direct WAN and expose your real IP. `Apply` reconciles the rule from the setting on every run; turning the switch off removes it. The dashboard shows the live state:
+
+| State | Meaning |
+|---|---|
+| `Active & tunneling` | Kill switch on, Tailscale healthy — traffic relaying |
+| `Paused — Tailscale down` | Kill switch on, Tailscale down — traffic dropped, not leaked |
+| `Kill switch off` | Switch disabled — traffic could leak via WAN if tailscaled crashes |
+
+Other posture notes:
+
+- With a password set: bcrypt-hashed (never stored), 12-hour session cookie (`HttpOnly`, `SameSite=Lax`, `Secure` under TLS), per-session CSRF tokens on every POST, login throttling (5 failures → exponential backoff per IP).
+- Tailscale auth keys entered in the UI are passed once to `tailscale up` and never written to disk; failures show a generic message, never the raw CLI output. Caveat: the key travels on the command line, so it is briefly visible in the process list (`ps`) to local root while that command runs — unavoidable with the CLI.
 - The state file (`state.json`) contains WireGuard private keys and is written atomically (temp file + rename) with mode `0600`.
 
 ## Architecture
