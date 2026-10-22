@@ -30,7 +30,7 @@ type Settings struct {
 	Keepalive        int    `json:"keepalive"`          // PersistentKeepalive seconds
 	ListenPort       int    `json:"listen_port"`        // server UDP port
 	Endpoint         string `json:"endpoint"`           // host:port clients connect to
-	ClientAllowedIPs string `json:"client_allowed_ips"` // default 0.0.0.0/0, ::/0
+	ClientAllowedIPs string `json:"client_allowed_ips"` // default 0.0.0.0/0 (IPv4-only; server has no IPv6 pool)
 	ExitNode         string `json:"exit_node"`          // desired tailscale exit node (hostname), "" = none
 	Routes           string `json:"routes"`             // routes to advertise, comma-separated
 }
@@ -52,7 +52,7 @@ func DefaultSettings() Settings {
 		Keepalive:        25,
 		ListenPort:       51820,
 		Endpoint:         "",
-		ClientAllowedIPs: "0.0.0.0/0, ::/0",
+		ClientAllowedIPs: "0.0.0.0/0",
 		ExitNode:         "",
 		Routes:           "",
 	}
