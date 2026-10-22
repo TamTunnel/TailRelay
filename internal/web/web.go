@@ -167,6 +167,11 @@ func logRequests(next http.Handler) http.Handler {
 
 func (s *Server) authRequired() bool { return len(s.d.Conf.PasswordHash) > 0 }
 
+// tls reports whether the UI is served over HTTPS, in which case cookies
+// must carry the Secure attribute (browsers won't send Secure cookies over
+// plain HTTP, so this must track the actual listener).
+func (s *Server) tls() bool { return s.d.Conf.TLSEnabled() }
+
 // sessionCSRF returns the CSRF token for a logged-in session.
 func (s *Server) sessionCSRF(r *http.Request) (string, bool) {
 	c, err := r.Cookie(sessionCookie)
@@ -216,7 +221,7 @@ func (s *Server) csrfToken(w http.ResponseWriter, r *http.Request) string {
 		return ""
 	}
 	http.SetCookie(w, &http.Cookie{Name: anonCSRFCookie, Value: tok, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.tls()})
 	return tok
 }
 
@@ -403,7 +408,7 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	s.sessions[tok] = session{csrf: csrf, expires: time.Now().Add(12 * time.Hour)}
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: 12 * 3600})
+		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.tls(), MaxAge: 12 * 3600})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -413,6 +418,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		delete(s.sessions, c.Value)
 		s.mu.Unlock()
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, MaxAge: -1, Path: "/"})
+	// Secure must match the login cookie or the browser keeps the old one.
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, MaxAge: -1, Path: "/", Secure: s.tls()})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

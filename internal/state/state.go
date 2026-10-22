@@ -33,6 +33,10 @@ type Settings struct {
 	ClientAllowedIPs string `json:"client_allowed_ips"` // default 0.0.0.0/0 (IPv4-only; server has no IPv6 pool)
 	ExitNode         string `json:"exit_node"`          // desired tailscale exit node (hostname), "" = none
 	Routes           string `json:"routes"`             // routes to advertise, comma-separated
+	// KillSwitch drops any WireGuard traffic not headed for the tailscale
+	// interface. On = a dead exit node or crashed tailscaled fails closed
+	// (traffic stops); off = traffic could leak via the VPS's direct WAN.
+	KillSwitch bool `json:"kill_switch"`
 }
 
 // State is the full persisted document.
@@ -55,6 +59,7 @@ func DefaultSettings() Settings {
 		ClientAllowedIPs: "0.0.0.0/0",
 		ExitNode:         "",
 		Routes:           "",
+		KillSwitch:       true,
 	}
 }
 
