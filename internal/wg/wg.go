@@ -375,7 +375,15 @@ func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) er
 		return fmt.Errorf("setting mtu: %w", err)
 	}
 	// Sync peers atomically from the rendered config.
-	if _, err := n.Run(ctx, "wg", "setconf", n.Iface, confPath); err != nil {
+	// wg setconf only understands PrivateKey/ListenPort/FwMark in
+	// [Interface]; the rendered file also carries wg-quick directives
+	// (Address, MTU) which setconf rejects, so feed it a stripped copy.
+	setconfPath := confPath + ".setconf"
+	if err := os.WriteFile(setconfPath, []byte(StripForSetconf(conf)), 0o600); err != nil {
+		return err
+	}
+	defer os.Remove(setconfPath)
+	if _, err := n.Run(ctx, "wg", "setconf", n.Iface, setconfPath); err != nil {
 		return fmt.Errorf("wg setconf: %w", err)
 	}
 	if _, err := n.Run(ctx, "ip", "link", "set", "up", "dev", n.Iface); err != nil {
@@ -385,6 +393,31 @@ func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) er
 		return err
 	}
 	return n.ensureNAT(ctx, st.Settings)
+}
+
+// StripForSetconf removes wg-quick-only directives (Address, MTU, DNS, …)
+// from a rendered config so the result is acceptable to `wg setconf`,
+// which only understands PrivateKey/ListenPort/FwMark in [Interface].
+// Addresses and MTU are applied separately via `ip addr add` / `ip link set`.
+func StripForSetconf(conf string) string {
+	drop := map[string]bool{
+		"address": true, "dns": true, "mtu": true, "table": true,
+		"preup": true, "predown": true, "postup": true, "postdown": true,
+		"saveconfig": true,
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(conf, "\n") {
+		if t := strings.TrimSpace(line); t != "" && !strings.HasPrefix(t, "#") {
+			if i := strings.Index(t, "="); i > 0 {
+				if drop[strings.ToLower(strings.TrimSpace(t[:i]))] {
+					continue
+				}
+			}
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func (n *NetOps) enableForwarding(ctx context.Context, wantV6 bool) error {
