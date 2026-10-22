@@ -365,9 +365,15 @@ func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) er
 
 	// Create interface (ignore "exists").
 	_, _ = n.Run(ctx, "ip", "link", "add", "dev", n.Iface, "type", "wireguard")
+	// ip addr add is idempotent: iproute2 reports duplicates as "File exists"
+	// (older) or "Address already assigned" (newer) — both are fine on re-apply.
+	addrExists := func(s string) bool {
+		ls := strings.ToLower(s)
+		return strings.Contains(ls, "exists") || strings.Contains(ls, "already assigned")
+	}
 	for _, a := range addrs {
 		if out, err := n.Run(ctx, "ip", "addr", "add", a, "dev", n.Iface); err != nil &&
-			!strings.Contains(string(out), "exists") && !strings.Contains(err.Error(), "exists") {
+			!addrExists(string(out)) && !addrExists(err.Error()) {
 			return fmt.Errorf("assigning address %s: %w", a, err)
 		}
 	}
