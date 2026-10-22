@@ -1,8 +1,6 @@
-// Package ts wraps the `tailscale` CLI: status, exit-node selection,
-// advertised routes, and `tailscale up`. In Docker the container runs its
-// own tailscaled (same network namespace as WireGuard); the static binary
-// install uses the host's. Either way the CLI talks to the default socket,
-// so no path configuration is needed.
+// Package ts wraps the host `tailscale` CLI: status, exit-node selection,
+// advertised routes, and `tailscale up`. tailscaled itself is a prerequisite;
+// Tailrelay never installs it.
 package ts
 
 import (
@@ -33,9 +31,6 @@ type Status struct {
 	Hostname      string   // this node's tailnet hostname
 	IPs           []string // this node's tailnet IPs
 	UsingExitNode bool
-	// ExitNodeName identifies the selected exit node: its tailnet hostname
-	// when known, else the stable node ID. "" when no exit node is in use.
-	ExitNodeName string
 }
 
 // rawStatus mirrors only the fields we need from `tailscale status --json`.
@@ -47,11 +42,7 @@ type rawStatus struct {
 		TailscaleIPs []string `json:"TailscaleIPs"`
 	} `json:"Self"`
 	ExitNodeStatus *struct {
-		ID       string `json:"ID"`
-		Online   bool   `json:"Online"`
-		Hostinfo *struct {
-			HostName string `json:"HostName"`
-		} `json:"Hostinfo"`
+		Online bool `json:"Online"`
 	} `json:"ExitNodeStatus"`
 }
 
@@ -68,11 +59,6 @@ func ParseStatus(data []byte) (*Status, error) {
 	}
 	if raw.ExitNodeStatus != nil {
 		st.UsingExitNode = raw.ExitNodeStatus.Online
-		if raw.ExitNodeStatus.Hostinfo != nil && raw.ExitNodeStatus.Hostinfo.HostName != "" {
-			st.ExitNodeName = raw.ExitNodeStatus.Hostinfo.HostName
-		} else {
-			st.ExitNodeName = raw.ExitNodeStatus.ID
-		}
 	}
 	return st, nil
 }
@@ -95,83 +81,30 @@ func IP4(ctx context.Context, run Runner) string {
 	return strings.TrimSpace(string(out))
 }
 
-// Version returns the tailscaled version (`tailscale version`), e.g.
-// "1.86.5". "" when the CLI is unreachable. Shown in the UI so a stale
-// bundled Tailscale is visible.
-func Version(ctx context.Context, run Runner) string {
-	out, err := run(ctx, "tailscale", "version")
-	if err != nil {
-		return ""
-	}
-	// First line is the bare version: "1.86.5\n  tailscale commit: ..."
-	f := strings.Fields(string(out))
-	if len(f) == 0 {
-		return ""
-	}
-	return f[0]
-}
-
-// ParseExitNodeList parses `tailscale exit-node list` text output. Two
-// formats exist in the wild:
+// ParseExitNodeList parses `tailscale exit-node list` text output:
 //
-//	# IP              HOSTNAME  COUNTRY  CITY       LATITUDE  LONGITUDE  STATUS      (older)
-//	100.64.1.2        exit-1    US       New York   40.7      -74.0      online
-//
-//	 IP               HOSTNAME                              COUNTRY     CITY      STATUS            (newer)
-//	 100.100.1.1      us-homerouter.shrimp-penny.ts.net     -           -         -
-//	 100.100.10.5     vp-firestick.shrimp-penny.ts.net      -           -         offline, last seen 368d ago
-//
-// The STATUS column is located via the header's character offset (it is the
-// last column, so trailing whitespace is harmless). Status meanings: "-",
-// "online" and "selected" are online; anything else (including
-// "offline, last seen …") is offline.
+//	# IP              HOSTNAME  COUNTRY  CITY      LATITUDE  LONGITUDE  STATUS
+//	100.64.1.2        exit-1    US       New York  40.7      -74.0      online
 func ParseExitNodeList(data []byte) []ExitNode {
 	var nodes []ExitNode
-	lines := strings.Split(string(data), "\n")
-	statusOff, hasLatLong := -1, false
-	for _, line := range lines {
-		t := strings.TrimSpace(line)
-		if t == "" {
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "IP ") {
 			continue
 		}
-		if statusOff < 0 && strings.Contains(t, "STATUS") {
-			// Header row (old format starts with "#"): locate STATUS by
-			// character offset; note whether LATITUDE/LONGITUDE columns
-			// sit between CITY and STATUS.
-			statusOff = strings.Index(line, "STATUS")
-			hasLatLong = strings.Contains(t, "LATITUDE")
-			continue
-		}
-		if strings.HasPrefix(t, "#") {
-			continue
-		}
-		f := strings.Fields(t)
-		if len(f) < 2 || strings.EqualFold(f[0], "IP") {
+		f := strings.Fields(line)
+		if len(f) < 3 {
 			continue
 		}
 		n := ExitNode{IP: f[0], Hostname: f[1]}
-		var status string
-		if statusOff >= 0 && statusOff < len(line) {
-			status = strings.TrimSpace(line[statusOff:])
-		} else {
-			status = f[len(f)-1]
-		}
-		switch sl := strings.ToLower(status); sl {
-		case "-", "online", "selected":
-			n.Online = true
-			n.Selected = sl == "selected"
-		}
-		// Country/city are the fields between hostname and status
-		// (minus lat/long when that format carries them).
-		if len(f) >= 3 {
+		status := strings.ToLower(f[len(f)-1])
+		n.Online = status == "online" || status == "selected"
+		n.Selected = status == "selected"
+		// Columns: IP HOSTNAME COUNTRY CITY... LATITUDE LONGITUDE STATUS
+		// (city may be multi-word, so count back from the end).
+		if len(f) >= 6 {
 			n.Country = f[2]
-			end := len(f) - len(strings.Fields(status))
-			if hasLatLong {
-				end -= 2
-			}
-			if end > 3 {
-				n.City = strings.Join(f[3:end], " ")
-			}
+			n.City = strings.Join(f[3:len(f)-3], " ")
 		}
 		nodes = append(nodes, n)
 	}
@@ -179,11 +112,8 @@ func ParseExitNodeList(data []byte) []ExitNode {
 }
 
 // ExitNodes lists exit-node candidates. Tries --json first, falls back to
-// the classic text table for older tailscale versions. The selected
-// argument (hostname or node ID, from Status.ExitNodeName) marks the
-// currently selected node — the --json list itself carries no selection
-// state, unlike the text table.
-func ExitNodes(ctx context.Context, run Runner, selected string) ([]ExitNode, error) {
+// the classic text table for older tailscale versions.
+func ExitNodes(ctx context.Context, run Runner) ([]ExitNode, error) {
 	if out, err := run(ctx, "tailscale", "exit-node", "list", "--json"); err == nil {
 		var payload struct {
 			ExitNodes []struct {
@@ -204,7 +134,6 @@ func ExitNodes(ctx context.Context, run Runner, selected string) ([]ExitNode, er
 				if len(e.Addresses) > 0 {
 					n.IP = strings.Split(e.Addresses[0], "/")[0]
 				}
-				n.Selected = selected != "" && (n.Hostname == selected || e.ID == selected)
 				nodes = append(nodes, n)
 			}
 			return nodes, nil
@@ -241,10 +170,8 @@ func SetAdvertiseRoutes(ctx context.Context, run Runner, routes string) error {
 	return err
 }
 
-// Up brings tailscaled up with an auth key. The key is passed via the
-// --authkey flag (the tailscale CLI does not honor TS_AUTHKEY env for
-// `up`; that's only for tailscaled). Use one-time keys; the key is never
-// persisted by Tailrelay.
+// Up brings tailscaled up with an auth key. The key is passed only to the
+// tailscale CLI and is never persisted by Tailrelay.
 func Up(ctx context.Context, run Runner, authKey, hostname string) error {
 	args := []string{"up", "--authkey=" + authKey}
 	if hostname != "" {
