@@ -3,6 +3,7 @@ package ts
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -165,5 +166,34 @@ func TestExitNodesSelectedFromJSON(t *testing.T) {
 	}
 	if !nodes[0].Selected || nodes[1].Selected {
 		t.Errorf("ID-based selection wrong: %+v", nodes)
+	}
+}
+
+func TestParseExitNodeListDashFormat(t *testing.T) {
+	// Newer tailscale: no lat/long columns, "-" means online, offline rows
+	// carry "offline, last seen …".
+	out := ` IP               HOSTNAME                              COUNTRY     CITY      STATUS
+ 100.100.1.1      us-homerouter.shrimp-penny.ts.net     -           -         -
+ 100.100.10.5     vp-firestick.shrimp-penny.ts.net      -           -         offline, last seen 368d ago
+ 100.100.1.2      vp-homerouter.shrimp-penny.ts.net     -           -         -
+`
+	nodes := ParseExitNodeList([]byte(out))
+	if len(nodes) != 3 {
+		t.Fatalf("got %d nodes, want 3", len(nodes))
+	}
+	if !nodes[0].Online || nodes[0].Selected {
+		t.Errorf("node 0 should be online: %+v", nodes[0])
+	}
+	if !nodes[2].Online {
+		t.Errorf("node 2 should be online: %+v", nodes[2])
+	}
+	if nodes[1].Online || nodes[1].Selected {
+		t.Errorf("node 1 should be offline: %+v", nodes[1])
+	}
+	if nodes[1].City != "-" || nodes[1].Country != "-" {
+		t.Errorf("node 1 location should be '- -', got %q %q", nodes[1].Country, nodes[1].City)
+	}
+	if strings.Contains(nodes[1].City, "offline") {
+		t.Errorf("status text leaked into city: %+v", nodes[1])
 	}
 }
