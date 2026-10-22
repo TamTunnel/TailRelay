@@ -27,6 +27,10 @@ type Config struct {
 	// InitialEndpoint pre-seeds the client-facing endpoint on first run,
 	// skipping the api.ipify.org auto-detection (see README "Privacy").
 	InitialEndpoint string
+	// TLSCert/TLSKey enable HTTPS for the web UI. Both must be set together;
+	// public (0.0.0.0) binds without TLS expose the password in cleartext.
+	TLSCert string
+	TLSKey  string
 }
 
 // Defaults.
@@ -73,6 +77,8 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 	iface := fs.String("iface", "", "wireguard interface name")
 	tsIface := fs.String("ts-iface", "", "tailscale interface name for NAT (default tailscale0)")
 	endpoint := fs.String("endpoint", "", "initial public endpoint host[:port]; skips ipify auto-detection")
+	tlsCert := fs.String("tls-cert", "", "TLS certificate file for the web UI (requires -tls-key)")
+	tlsKey := fs.String("tls-key", "", "TLS private key file for the web UI (requires -tls-cert)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -111,6 +117,11 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 	c.Iface = getenv(*iface, "TR_IFACE", DefaultIface)
 	c.TailscaleIface = getenv(*tsIface, "TR_TAILSCALE_IFACE", DefaultTailscaleIface)
 	c.InitialEndpoint = getenv(*endpoint, "TR_ENDPOINT", "")
+	c.TLSCert = getenv(*tlsCert, "TR_TLS_CERT", "")
+	c.TLSKey = getenv(*tlsKey, "TR_TLS_KEY", "")
+	if (c.TLSCert == "") != (c.TLSKey == "") {
+		return nil, fmt.Errorf("TLS needs both a certificate and a key: set TR_TLS_CERT and TR_TLS_KEY (or neither)")
+	}
 
 	pw := *password
 	if pw == "" {
@@ -137,14 +148,21 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 // Addr returns host:port for net/http.
 func (c *Config) Addr() string { return net.JoinHostPort(c.BindAddr, strconv.Itoa(c.Port)) }
 
+// TLSEnabled reports whether the web UI serves HTTPS.
+func (c *Config) TLSEnabled() bool { return c.TLSCert != "" && c.TLSKey != "" }
+
 // Redacted describes the effective config without secrets, for logging.
 func (c *Config) Redacted() string {
 	auth := "none (tailnet/localhost gate)"
 	if len(c.PasswordHash) > 0 {
 		auth = "password"
 	}
-	return fmt.Sprintf("bind=%s auth=%s state=%s conf=%s iface=%s ts-iface=%s",
-		c.Addr(), auth, c.StatePath, c.ConfPath, c.Iface, c.TailscaleIface)
+	tls := "off"
+	if c.TLSEnabled() {
+		tls = "on"
+	}
+	return fmt.Sprintf("bind=%s auth=%s tls=%s state=%s conf=%s iface=%s ts-iface=%s",
+		c.Addr(), auth, tls, c.StatePath, c.ConfPath, c.Iface, c.TailscaleIface)
 }
 
 // ListenEnvHint documents every supported variable for README/--help reuse.
@@ -158,5 +176,7 @@ func ListenEnvHint() string {
 		"TR_IFACE         wireguard interface name (default wg0)",
 		"TR_TAILSCALE_IFACE tailscale interface NAT target (default tailscale0)",
 		"TR_ENDPOINT      initial endpoint host[:port]; skips the ipify.org lookup on first run",
+		"TR_TLS_CERT      TLS certificate file for the web UI (needs TR_TLS_KEY)",
+		"TR_TLS_KEY       TLS private key file for the web UI (needs TR_TLS_CERT)",
 	}, "\n")
 }
