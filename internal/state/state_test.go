@@ -92,3 +92,9 @@ func TestLoadMissing(t *testing.T) {
 		t.Error("Exists() should be false for missing file")
 	}
 }
+
+func TestDefaultSettingsIPv4Only(t *testing.T) {
+	if got := DefaultSettings().ClientAllowedIPs; got != "0.0.0.0/0" {
+		t.Errorf("default ClientAllowedIPs = %q, want 0.0.0.0/0 (server is IPv4-only)", got)
+	}
+}

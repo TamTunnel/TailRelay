@@ -68,12 +68,14 @@ Everything network-related lives in the web UI (Settings page). Process-level co
 | `TR_STATE_PATH` | `-state` | `/var/lib/tailrelay/state.json` | State file (0600, holds private keys) |
 | `TR_CONF_PATH` | `-conf` | `/etc/wireguard/wg0.conf` | Generated server config |
 | `TR_IFACE` | `-iface` | `wg0` | WireGuard interface name |
+| `TR_TAILSCALE_IFACE` | `-ts-iface` | `tailscale0` | Tailscale interface the NAT rules target; startup fails loudly if it doesn't exist |
+| `TR_ENDPOINT` | `-endpoint` | *(none)* | Pre-seed the public endpoint on first run; skips the ipify.org auto-detection (see Privacy) |
 
 Security posture:
 
 - Default bind is the Tailscale interface IPv4 — only devices on your tailnet can reach the UI, and tailnet identity is the gate. Binding `0.0.0.0` without `TR_ADMIN_PASSWORD` is a hard startup error.
 - With a password set: bcrypt-hashed (never stored), 12-hour session cookie (`HttpOnly`, `SameSite=Lax`), per-session CSRF tokens on every POST.
-- Tailscale auth keys entered in the UI are passed once to `tailscale up` and never written to disk.
+- Tailscale auth keys entered in the UI are passed once to `tailscale up` and never written to disk. Caveat: the key travels on the command line, so it is briefly visible in the process list (`ps`) to local root while that command runs — unavoidable with the CLI, and it's never stored, logged, or included in error messages (secret-bearing args are redacted).
 - The state file (`state.json`) contains WireGuard private keys and is written atomically (temp file + rename) with mode `0600`.
 
 ## Architecture
@@ -125,10 +127,10 @@ Both. With an exit node selected, all client traffic exits through it (full tunn
 `/var/lib/tailrelay/state.json` (0600) and the generated `/etc/wireguard/wg0.conf` (0600). Back up the state file and you can rebuild the server anywhere.
 
 **What if I change the IP pool?**
-The server takes `.1` of the new pool immediately; existing clients keep their old IPs until you remove/re-add them. Pick the pool before enrolling clients.
+You can't while clients exist — the UI refuses the change and tells you to remove them first. (Reason: the server would take `.1` of the new pool while clients kept stale IPs from the old one, silently breaking them.) Pick the pool before enrolling clients.
 
 **Does it support IPv6 clients?**
-Not in v1 — the pool allocator is IPv4-only. The client `AllowedIPs` includes `::/0` so IPv6 traffic still routes (and exits) through the tunnel.
+Not in v1 — the pool allocator is IPv4-only, and the default client `AllowedIPs` is `0.0.0.0/0` (IPv4 only). We deliberately don't ship `::/0` in the default: with no IPv6 pool or route on the server, it would blackhole all client IPv6 traffic. You can add `::/0` manually in Settings if you know what you're doing.
 
 **How do I update?**
 Replace the binary, `systemctl restart tailrelay`. State and `wg0.conf` are preserved; the interface is re-applied on start.
@@ -158,6 +160,12 @@ sudo tailscale up
 If it's installed but not logged in, the dashboard offers a `tailscale up` form — paste an auth key (from https://login.tailscale.com/admin/settings/keys), and Tailrelay runs `tailscale up --authkey=...` once. The key is never stored.
 
 Why not install Tailscale automatically? Installing a privileged network daemon is distro-specific (apt/dnf/pacman/apk…) and a security-sensitive step that should be a conscious admin decision, not a side effect of starting a web UI. Out of scope by design.
+
+## Privacy
+
+On first run only, Tailrelay makes one outbound HTTPS request to `https://api.ipify.org` to auto-detect the VPS's public IPv4 and pre-fill the client endpoint. That's the only network call it ever makes on its own — no telemetry, no update checks.
+
+To skip it entirely, set `TR_ENDPOINT` (or `-endpoint`) to your public `host[:port]` before the first start; the lookup is then never made. You can also just clear or override the endpoint in Settings at any time.
 
 ## Building from source
 

@@ -65,7 +65,7 @@ pool <code>{{.WG.Pool}}</code> ·
 <h3>Advertised routes</h3>
 <form method="post" action="/ts/routes">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
-<input name="routes" size="40" value="{{.TS.Routes}}" placeholder="e.g. 192.168.1.0/24">
+<input name="routes" size="40" value="{{.Routes}}" placeholder="e.g. 192.168.1.0/24">
 <button type="submit">Advertise</button>
 <span class="dim">comma-separated; empty clears</span>
 </form>

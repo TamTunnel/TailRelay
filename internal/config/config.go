@@ -17,20 +17,25 @@ import (
 // Config holds runtime configuration. WireGuard/Tailscale network settings
 // live in the state file (editable via the web UI); this is process config.
 type Config struct {
-	BindAddr     string // address the web UI listens on
-	Port         int    // web UI port
-	PasswordHash []byte // bcrypt hash of the admin password, nil = no auth
-	StatePath    string // /var/lib/tailrelay/state.json
-	ConfPath     string // /etc/wireguard/wg0.conf
-	Iface        string // wg0
+	BindAddr       string // address the web UI listens on
+	Port           int    // web UI port
+	PasswordHash   []byte // bcrypt hash of the admin password, nil = no auth
+	StatePath      string // /var/lib/tailrelay/state.json
+	ConfPath       string // /etc/wireguard/wg0.conf
+	Iface          string // wg0
+	TailscaleIface string // tailscale0: interface WireGuard traffic is NATed onto
+	// InitialEndpoint pre-seeds the client-facing endpoint on first run,
+	// skipping the api.ipify.org auto-detection (see README "Privacy").
+	InitialEndpoint string
 }
 
 // Defaults.
 const (
-	DefaultPort      = 8080
-	DefaultStatePath = "/var/lib/tailrelay/state.json"
-	DefaultConfPath  = "/etc/wireguard/wg0.conf"
-	DefaultIface     = "wg0"
+	DefaultPort           = 8080
+	DefaultStatePath      = "/var/lib/tailrelay/state.json"
+	DefaultConfPath       = "/etc/wireguard/wg0.conf"
+	DefaultIface          = "wg0"
+	DefaultTailscaleIface = "tailscale0"
 )
 
 // tailnetIPv4 reports whether addr is inside the Tailscale CGNAT range.
@@ -66,6 +71,8 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 	statePath := fs.String("state", "", "path to state.json")
 	confPath := fs.String("conf", "", "path to write wg0.conf")
 	iface := fs.String("iface", "", "wireguard interface name")
+	tsIface := fs.String("ts-iface", "", "tailscale interface name for NAT (default tailscale0)")
+	endpoint := fs.String("endpoint", "", "initial public endpoint host[:port]; skips ipify auto-detection")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -102,6 +109,8 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 	c.StatePath = getenv(*statePath, "TR_STATE_PATH", DefaultStatePath)
 	c.ConfPath = getenv(*confPath, "TR_CONF_PATH", DefaultConfPath)
 	c.Iface = getenv(*iface, "TR_IFACE", DefaultIface)
+	c.TailscaleIface = getenv(*tsIface, "TR_TAILSCALE_IFACE", DefaultTailscaleIface)
+	c.InitialEndpoint = getenv(*endpoint, "TR_ENDPOINT", "")
 
 	pw := *password
 	if pw == "" {
@@ -134,8 +143,8 @@ func (c *Config) Redacted() string {
 	if len(c.PasswordHash) > 0 {
 		auth = "password"
 	}
-	return fmt.Sprintf("bind=%s auth=%s state=%s conf=%s iface=%s",
-		c.Addr(), auth, c.StatePath, c.ConfPath, c.Iface)
+	return fmt.Sprintf("bind=%s auth=%s state=%s conf=%s iface=%s ts-iface=%s",
+		c.Addr(), auth, c.StatePath, c.ConfPath, c.Iface, c.TailscaleIface)
 }
 
 // ListenEnvHint documents every supported variable for README/--help reuse.
@@ -147,5 +156,7 @@ func ListenEnvHint() string {
 		"TR_STATE_PATH    state file path (default /var/lib/tailrelay/state.json)",
 		"TR_CONF_PATH     generated wg0.conf path (default /etc/wireguard/wg0.conf)",
 		"TR_IFACE         wireguard interface name (default wg0)",
+		"TR_TAILSCALE_IFACE tailscale interface NAT target (default tailscale0)",
+		"TR_ENDPOINT      initial endpoint host[:port]; skips the ipify.org lookup on first run",
 	}, "\n")
 }
