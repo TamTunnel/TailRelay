@@ -1,0 +1,13 @@
+# binaries
+tailrelay
+tailrelay-*
+
+# local test / runtime artifacts
+*.log
+*.tmp
+
+# editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store

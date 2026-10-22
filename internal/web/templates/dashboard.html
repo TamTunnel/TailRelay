@@ -1,0 +1,83 @@
+{{template "header" .}}
+<h1>Dashboard</h1>
+
+<section class="card">
+<h2>WireGuard server</h2>
+{{if .WG.Up}}
+<p>Status: <span class="pill ok">up</span>
+interface <code>{{.WG.Iface}}</code> ·
+endpoint <code>{{.WG.Endpoint}}</code> ·
+pool <code>{{.WG.Pool}}</code> ·
+{{len .Peers}} client(s)</p>
+<p>Server public key: <code class="key">{{.WG.ServerPub}}</code></p>
+{{else}}
+<p>Status: <span class="pill err">down</span> — {{.WG.DownReason}}</p>
+<form method="post" action="/wg/apply"><input type="hidden" name="csrf" value="{{.CSRF}}"><button type="submit">Bring interface up</button></form>
+{{end}}
+</section>
+
+<section class="card">
+<h2>Peers</h2>
+{{if .Peers}}
+<table>
+<tr><th>Name</th><th>Address</th><th>Last handshake</th><th>Transfer</th><th></th></tr>
+{{range .Peers}}
+<tr>
+<td><a href="/clients">{{.Name}}</a></td>
+<td><code>{{.Address}}</code></td>
+<td>{{if .LastHandshake}}{{.LastHandshake}}{{else}}<span class="dim">never</span>{{end}}</td>
+<td class="dim">{{.Rx}} ↓ / {{.Tx}} ↑</td>
+<td><a href="/conf/{{.Name}}">config</a> · <a href="/qr/{{.Name}}">QR</a></td>
+</tr>
+{{end}}
+</table>
+{{else}}
+<p class="dim">No clients yet. <a href="/clients">Add one</a>.</p>
+{{end}}
+</section>
+
+<section class="card">
+<h2>Tailscale bridge</h2>
+{{if .TS.Running}}
+<p>Status: <span class="pill ok">connected</span>
+{{.TS.Hostname}} ·
+{{range .TS.IPs}}<code>{{.}}</code> {{end}}
+{{if .TS.UsingExitNode}}· relaying via <strong>exit node</strong>{{end}}</p>
+
+<h3>Exit node for WireGuard traffic</h3>
+<form method="post" action="/ts/exit-node">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<table>
+<tr><th></th><th>Hostname</th><th>IP</th><th>Location</th><th>Status</th></tr>
+<tr><td><input type="radio" name="node" value="" {{if not .TS.UsingExitNode}}checked{{end}}></td><td colspan="3"><em>No exit node (direct)</em></td><td></td></tr>
+{{range .ExitNodes}}
+<tr>
+<td><input type="radio" name="node" value="{{.Hostname}}" {{if .Selected}}checked{{end}} {{if not .Online}}disabled{{end}}></td>
+<td><code>{{.Hostname}}</code></td><td><code>{{.IP}}</code></td>
+<td>{{.Country}} {{.City}}</td>
+<td>{{if .Selected}}<span class="pill ok">selected</span>{{else if .Online}}<span class="pill">online</span>{{else}}<span class="dim">offline</span>{{end}}</td>
+</tr>
+{{end}}
+</table>
+<button type="submit">Apply exit node</button>
+</form>
+
+<h3>Advertised routes</h3>
+<form method="post" action="/ts/routes">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input name="routes" size="40" value="{{.TS.Routes}}" placeholder="e.g. 192.168.1.0/24">
+<button type="submit">Advertise</button>
+<span class="dim">comma-separated; empty clears</span>
+</form>
+{{else}}
+<p>Status: <span class="pill err">{{.TS.BackendState}}</span> — tailscaled is not logged in.</p>
+<form method="post" action="/ts/up">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<input name="authkey" size="40" placeholder="tskey-auth-..." autocomplete="off">
+<input name="hostname" size="20" placeholder="hostname (optional)">
+<button type="submit">tailscale up</button>
+<span class="dim">auth key is used once and never stored</span>
+</form>
+{{end}}
+</section>
+{{template "footer" .}}

@@ -1,0 +1,35 @@
+{{template "header" .}}
+<h1>Settings</h1>
+<section class="card">
+<form method="post" action="/settings">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<label>Client IP pool (CIDR)
+<input name="pool_cidr" value="{{.S.PoolCIDR}}" required></label>
+<p class="dim">Server takes .1. Changing the pool does not renumber existing clients.</p>
+<label>DNS for clients
+<input name="dns" value="{{.S.DNS}}" required></label>
+<label>MTU
+<input name="mtu" type="number" min="1280" max="9000" value="{{.S.MTU}}" required></label>
+<label>Persistent keepalive (seconds)
+<input name="keepalive" type="number" min="0" max="3600" value="{{.S.Keepalive}}" required></label>
+<label>Server UDP listen port
+<input name="listen_port" type="number" min="1" max="65535" value="{{.S.ListenPort}}" required></label>
+<label>Public endpoint (host or host:port shown in client configs)
+<input name="endpoint" value="{{.S.Endpoint}}" placeholder="vpn.example.com or 203.0.113.10"></label>
+<p class="dim">Leave empty to auto-detect the VPS public IP at startup; override here any time.</p>
+<label>Client AllowedIPs
+<input name="client_allowed_ips" value="{{.S.ClientAllowedIPs}}" required></label>
+<p class="dim"><code>0.0.0.0/0, ::/0</code> routes all client traffic through this VPS and the chosen Tailscale exit node.</p>
+<button type="submit">Save &amp; re-apply WireGuard</button>
+</form>
+</section>
+
+<section class="card">
+<h2>WireGuard interface</h2>
+<form method="post" action="/wg/apply">
+<input type="hidden" name="csrf" value="{{.CSRF}}">
+<button type="submit">Re-apply interface + NAT rules</button>
+<span class="dim">Rewrites {{.ConfPath}} and re-syncs peers.</span>
+</form>
+</section>
+{{template "footer" .}}
