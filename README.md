@@ -2,7 +2,7 @@
 
 **Turn a cheap VPS into a WireGuard VPN server whose traffic rides your Tailscale network — managed from a tiny web UI.**
 
-**[Live demo](https://tamtunnel.github.io/TailRelay/)** — screenshots of the real web UI.
+**[Live demo](https://tamtunnel.github.io/TailRelay/)** — screenshots of the real web UI, plus a [73-second explainer video](https://tamtunnel.github.io/TailRelay/#video).
 
 ## The problem, in plain language
 
