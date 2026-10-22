@@ -24,7 +24,7 @@ pool <code>{{.WG.Pool}}</code> ·
 {{range .Peers}}
 <tr>
 <td><a href="/clients">{{.Name}}</a></td>
-<td><code>{{.Address}}</code>{{if .AddressV6}}<br><code class="dim">{{.AddressV6}}</code>{{end}}</td>
+<td><code>{{.Address}}</code></td>
 <td>{{if .LastHandshake}}{{.LastHandshake}}{{else}}<span class="dim">never</span>{{end}}</td>
 <td class="dim">{{.Rx}} ↓ / {{.Tx}} ↑</td>
 <td><a href="/conf/{{.Name}}">config</a> · <a href="/qr/{{.Name}}">QR</a></td>
@@ -38,14 +38,11 @@ pool <code>{{.WG.Pool}}</code> ·
 
 <section class="card">
 <h2>Tailscale bridge</h2>
-<p>Kill switch: <span class="pill {{.KillSwitchPill}}">{{.KillSwitchLabel}}</span>
-{{if .KillSwitchLeakNote}}<span class="dim">— WireGuard client traffic could leak via the VPS's direct WAN if tailscaled crashes. Re-enable it in <a href="/settings">Settings</a>.</span>{{end}}</p>
 {{if .TS.Running}}
 <p>Status: <span class="pill ok">connected</span>
 {{.TS.Hostname}} ·
 {{range .TS.IPs}}<code>{{.}}</code> {{end}}
-{{if .TS.UsingExitNode}}· relaying via exit node <strong>{{.TS.ExitNodeName}}</strong> <span class="pill ok">online</span>{{end}}</p>
-{{if .ExitNodeWarning}}<p class="banner warn">{{.ExitNodeWarning}}</p>{{end}}
+{{if .TS.UsingExitNode}}· relaying via <strong>exit node</strong>{{end}}</p>
 
 <h3>Exit node for WireGuard traffic</h3>
 <form method="post" action="/ts/exit-node">
@@ -68,7 +65,7 @@ pool <code>{{.WG.Pool}}</code> ·
 <h3>Advertised routes</h3>
 <form method="post" action="/ts/routes">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
-<input name="routes" size="40" value="{{.Routes}}" placeholder="e.g. 192.168.1.0/24">
+<input name="routes" size="40" value="{{.TS.Routes}}" placeholder="e.g. 192.168.1.0/24">
 <button type="submit">Advertise</button>
 <span class="dim">comma-separated; empty clears</span>
 </form>
