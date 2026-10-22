@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"regexp"
@@ -22,6 +23,62 @@ var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$`)
 
 func validName(n string) bool { return nameRe.MatchString(n) }
 
+var labelRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// validHost reports whether h is a valid IP or DNS hostname (no
+// whitespace/newlines — these values are rendered into client .conf files).
+func validHost(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return true
+	}
+	for _, label := range strings.Split(h, ".") {
+		if !labelRe.MatchString(label) {
+			return false
+		}
+	}
+	return true
+}
+
+// validEndpoint reports whether s is empty or host[:port].
+func validEndpoint(s string) bool {
+	if s == "" {
+		return true
+	}
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		host, port = s, "" // no port present
+	}
+	if port != "" {
+		p, perr := strconv.Atoi(port)
+		if perr != nil || p < 1 || p > 65535 {
+			return false
+		}
+	}
+	return validHost(host)
+}
+
+// validAllowedIPs reports whether s is a comma-separated list of CIDRs.
+// Raw CR/LF is rejected outright: the value is rendered verbatim into
+// client .conf files, so a newline here would inject config lines.
+func validAllowedIPs(s string) bool {
+	if strings.ContainsAny(s, "\r\n") {
+		return false
+	}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return false
+		}
+		if _, _, err := net.ParseCIDR(part); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func findClient(st *state.State, name string) *state.Client {
 	for i := range st.Clients {
 		if st.Clients[i].Name == name {
@@ -36,6 +93,18 @@ type peerView struct {
 	Address       string
 	LastHandshake string
 	Rx, Tx        string
+}
+
+// shortErr trims a runner error for UI display (first line only).
+func shortErr(err error) string {
+	msg := err.Error()
+	if i := strings.Index(msg, "\n"); i >= 0 {
+		msg = msg[:i]
+	}
+	if len(msg) > 120 {
+		msg = msg[:117] + "..."
+	}
+	return msg
 }
 
 func humanBytes(n uint64) string {
@@ -92,11 +161,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dump, derr := s.d.WG.Dump(ctx)
-	if derr == nil && len(dump) >= 0 {
+	if derr != nil {
+		data.WG.Up = false
+		data.WG.DownReason = "wireguard interface not responding (" + shortErr(derr) + ")"
+	} else {
 		data.WG.Up = true
-	}
-	if !data.WG.Up {
-		data.WG.DownReason = "interface not found (needs NET_ADMIN / root)"
 	}
 	for _, c := range st.Clients {
 		pv := peerView{Name: c.Name, Address: c.Address}
@@ -114,7 +183,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		data.TS = *tstat
 		data.Routes = st.Settings.Routes
 		if tstat.Running {
-			if nodes, nerr := ts.ExitNodes(ctx, s.d.TS); nerr == nil {
+			selected := tstat.ExitNodeName
+			if selected == "" {
+				selected = st.Settings.ExitNode // fall back to the stored choice
+			}
+			if nodes, nerr := ts.ExitNodes(ctx, s.d.TS, selected); nerr == nil {
 				data.ExitNodes = nodes
 			}
 		}
@@ -345,7 +418,31 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		redirectErr(w, r, "/settings", fmt.Errorf("DNS and AllowedIPs are required"))
 		return
 	}
-	err := s.d.Store.Update(func(st *state.State) error {
+	if !validHost(ns.DNS) {
+		redirectErr(w, r, "/settings", fmt.Errorf("bad DNS %q: must be an IP or hostname", ns.DNS))
+		return
+	}
+	if !validEndpoint(ns.Endpoint) {
+		redirectErr(w, r, "/settings", fmt.Errorf("bad endpoint %q: must be host or host:port", ns.Endpoint))
+		return
+	}
+	if !validAllowedIPs(ns.ClientAllowedIPs) {
+		redirectErr(w, r, "/settings", fmt.Errorf("bad AllowedIPs %q: must be comma-separated CIDRs", ns.ClientAllowedIPs))
+		return
+	}
+	// Changing the pool orphans existing clients (they keep old IPs while
+	// the server moves to .1 of the new pool). Refuse until they're gone.
+	cur, err := s.d.Store.Load()
+	if err != nil {
+		redirectErr(w, r, "/settings", fmt.Errorf("loading state: %w", err))
+		return
+	}
+	if ns.PoolCIDR != cur.Settings.PoolCIDR && len(cur.Clients) > 0 {
+		redirectErr(w, r, "/settings", fmt.Errorf(
+			"cannot change the IP pool while %d client(s) exist — remove them first, then change the pool and re-add", len(cur.Clients)))
+		return
+	}
+	err = s.d.Store.Update(func(st *state.State) error {
 		keep := st.Settings.ExitNode
 		routes := st.Settings.Routes
 		st.Settings = ns
@@ -374,10 +471,12 @@ func (s *Server) handleExitNode(w http.ResponseWriter, r *http.Request) {
 		redirectErr(w, r, "/", fmt.Errorf("tailscale set --exit-node: %w", err))
 		return
 	}
-	_ = s.d.Store.Update(func(st *state.State) error {
+	if err := s.d.Store.Update(func(st *state.State) error {
 		st.Settings.ExitNode = node
 		return nil
-	})
+	}); err != nil {
+		log.Printf("warning: persisting exit-node choice: %v", err)
+	}
 	if node == "" {
 		redirectMsg(w, r, "/", "exit node cleared")
 	} else {
@@ -393,10 +492,12 @@ func (s *Server) handleRoutes(w http.ResponseWriter, r *http.Request) {
 		redirectErr(w, r, "/", fmt.Errorf("tailscale set --advertise-routes: %w", err))
 		return
 	}
-	_ = s.d.Store.Update(func(st *state.State) error {
+	if err := s.d.Store.Update(func(st *state.State) error {
 		st.Settings.Routes = routes
 		return nil
-	})
+	}); err != nil {
+		log.Printf("warning: persisting advertised routes: %v", err)
+	}
 	redirectMsg(w, r, "/", "advertised routes updated")
 }
 
