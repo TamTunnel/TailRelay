@@ -21,8 +21,7 @@ One static Go binary (~9 MB), no runtime, no database — state is a single JSON
 ### Prerequisites
 
 - A Linux VPS (any distro with a modern kernel).
-- **Kernel WireGuard** (`wireguard` kernel module) and the `wg`, `ip`, `iptables`, `sysctl` tools (`ip6tables` too if you keep the default dual-stack IPv6).
-- Tailrelay enables `net.ipv4.ip_forward=1` itself on start, plus `net.ipv6.conf.all.forwarding=1` when the IPv6 pool is enabled.
+- **Kernel WireGuard** (`wireguard` kernel module) and the `wg`, `ip`, `iptables`, `sysctl` tools.
 - **Tailscale installed and logged in** on the VPS (`tailscaled` running). Tailrelay does not install Tailscale for you — installing it is distro-specific and privileged, so it stays out of scope. It *can* run `tailscale up --authkey=...` for you from the UI if you hand it a key.
 - Root (or at least `NET_ADMIN`) — creating network interfaces and NAT rules requires it.
 
@@ -69,34 +68,12 @@ Everything network-related lives in the web UI (Settings page). Process-level co
 | `TR_STATE_PATH` | `-state` | `/var/lib/tailrelay/state.json` | State file (0600, holds private keys) |
 | `TR_CONF_PATH` | `-conf` | `/etc/wireguard/wg0.conf` | Generated server config |
 | `TR_IFACE` | `-iface` | `wg0` | WireGuard interface name |
-| `TR_TAILSCALE_IFACE` | `-ts-iface` | `tailscale0` | Tailscale interface the NAT rules target; startup fails loudly if it doesn't exist |
-| `TR_ENDPOINT` | `-endpoint` | *(none)* | Pre-seed the public endpoint on first run; skips the ipify.org auto-detection (see Privacy) |
-| `TR_IPV6_POOL` | `-ipv6-pool` | random ULA `/64` | Pre-seed the IPv6 client pool on first run instead of generating one |
-| `TR_TLS_CERT` | `-tls-cert` | *(none)* | TLS certificate file for the web UI (requires `TR_TLS_KEY`) |
-| `TR_TLS_KEY` | `-tls-key` | *(none)* | TLS private key file for the web UI (requires `TR_TLS_CERT`) |
 
-## Security
+Security posture:
 
-Threat model, plainly stated:
-
-**The tailnet is the auth boundary (default mode).** Binding to the Tailscale interface means only devices on your tailnet can reach the UI — no password needed, tailnet identity is the gate. Consequence, by design: **any device on your tailnet can download every client's WireGuard private key** via the UI (`/conf/…`, `/qr/…`). If your tailnet includes devices you don't fully trust, don't use the default mode — bind `0.0.0.0` with `TR_ADMIN_PASSWORD` (mandatory; the process refuses to start without it) and put TLS in front (see below).
-
-**Public binds need TLS.** Without it, the admin password and session cookie travel in cleartext HTTP. Either pass `-tls-cert`/`-tls-key` (or `TR_TLS_CERT`/`TR_TLS_KEY`) so Tailrelay serves HTTPS directly — session/CSRF cookies then carry the `Secure` attribute — or terminate TLS in a reverse proxy in front of it.
-
-**Exit nodes never auto-switch.** A dead pinned exit node fails closed: Tailscale stops routing (it does not pick another node — `auto:any` is never offered in the picker), so WireGuard client traffic stops too. Recovery is manual: the dashboard shows a prominent warning banner naming the offline node, and you pick another one. Nodes are pinned by MagicDNS hostname, never by tailnet IP.
-
-**Kill switch (default: on).** Setting *Kill Switch (Pause when Tailscale is down)* installs firewall rules that drop any WireGuard traffic not headed for the Tailscale interface (`-i wg0 ! -o tailscale0 -j DROP` in both `iptables` and `ip6tables`, appended after the relay ACCEPTs). If `tailscaled` itself crashes and `tailscale0` vanishes, client traffic is dropped — it can never fall through to the VPS's direct WAN and expose your real IP. `Apply` reconciles the rules from the setting on every run; turning the switch off removes them. The dashboard shows the live state:
-
-| State | Meaning |
-|---|---|
-| `Active & tunneling` | Kill switch on, Tailscale healthy — traffic relaying |
-| `Paused — Tailscale down` | Kill switch on, Tailscale down — traffic dropped, not leaked |
-| `Kill switch off` | Switch disabled — traffic could leak via WAN if tailscaled crashes |
-
-Other posture notes:
-
-- With a password set: bcrypt-hashed (never stored), 12-hour session cookie (`HttpOnly`, `SameSite=Lax`, `Secure` under TLS), per-session CSRF tokens on every POST, login throttling (5 failures → exponential backoff per IP).
-- Tailscale auth keys entered in the UI are passed once to `tailscale up` and never written to disk; failures show a generic message, never the raw CLI output. Caveat: the key travels on the command line, so it is briefly visible in the process list (`ps`) to local root while that command runs — unavoidable with the CLI.
+- Default bind is the Tailscale interface IPv4 — only devices on your tailnet can reach the UI, and tailnet identity is the gate. Binding `0.0.0.0` without `TR_ADMIN_PASSWORD` is a hard startup error.
+- With a password set: bcrypt-hashed (never stored), 12-hour session cookie (`HttpOnly`, `SameSite=Lax`), per-session CSRF tokens on every POST.
+- Tailscale auth keys entered in the UI are passed once to `tailscale up` and never written to disk.
 - The state file (`state.json`) contains WireGuard private keys and is written atomically (temp file + rename) with mode `0600`.
 
 ## Architecture
@@ -105,13 +82,13 @@ Other posture notes:
                   ┌─────────────────────────────────────────┐
   WireGuard       │  VPS                                      │
   clients         │                                           │
-   (phone,        │  wg0 ──NAT──▶ tailscale0 ─┐                │
-   laptop, ...) ─▶│  10.7.0.1, fd..::1  ▲      │                │
-                  │       │ tailrelay (Go, :8080)             │
-                  │       │  - generates wg0.conf             │
-                  │       │  - manages peers via wg setconf   │
-                  │       │  - iptables/ip6tables MASQUERADE  │
-                  └───────┼──────────────────────────────┼───┘
+   (phone,        │  wg0 (10.7.0.1) ──NAT──▶ tailscale0 ──┐   │
+   laptop, ...) ─▶│       ▲                               │   │
+                  │       │ tailrelay (Go, :8080)         │   │
+                  │       │  - generates wg0.conf         │   │
+                  │       │  - manages peers via wg setconf│   │
+                  │       │  - iptables MASQUERADE        │   │
+                  └───────┼───────────────────────────────┼───┘
                           │                               │
                      tailnet                   chosen exit node
 ```
@@ -148,10 +125,10 @@ Both. With an exit node selected, all client traffic exits through it (full tunn
 `/var/lib/tailrelay/state.json` (0600) and the generated `/etc/wireguard/wg0.conf` (0600). Back up the state file and you can rebuild the server anywhere.
 
 **What if I change the IP pool?**
-You can't while clients exist — the UI refuses the change and tells you to remove them first. (Reason: the server would take `.1` of the new pool while clients kept stale IPs from the old one, silently breaking them.) Pick the pool before enrolling clients.
+The server takes `.1` of the new pool immediately; existing clients keep their old IPs until you remove/re-add them. Pick the pool before enrolling clients.
 
 **Does it support IPv6 clients?**
-Yes — dual-stack is the default (WG Easy-style). On first run Tailrelay generates a random ULA `/64` (e.g. `fd3a:9c1e:77b2::/64`), the server takes `::1`, clients get `::2`, `::3`…, and the default client `AllowedIPs` is `0.0.0.0/0, ::/0`. NAT (`ip6tables` MASQUERADE) and the kill-switch DROP cover both families. To run IPv4-only, clear the IPv6 pool field in Settings (the UI also normalizes the default `AllowedIPs` back to `0.0.0.0/0` for you — leaving `::/0` with no v6 pool would blackhole client IPv6 traffic). The v6 pool, like the v4 pool, can't be changed while clients exist.
+Not in v1 — the pool allocator is IPv4-only. The client `AllowedIPs` includes `::/0` so IPv6 traffic still routes (and exits) through the tunnel.
 
 **How do I update?**
 Replace the binary, `systemctl restart tailrelay`. State and `wg0.conf` are preserved; the interface is re-applied on start.
@@ -181,12 +158,6 @@ sudo tailscale up
 If it's installed but not logged in, the dashboard offers a `tailscale up` form — paste an auth key (from https://login.tailscale.com/admin/settings/keys), and Tailrelay runs `tailscale up --authkey=...` once. The key is never stored.
 
 Why not install Tailscale automatically? Installing a privileged network daemon is distro-specific (apt/dnf/pacman/apk…) and a security-sensitive step that should be a conscious admin decision, not a side effect of starting a web UI. Out of scope by design.
-
-## Privacy
-
-On first run only, Tailrelay makes one outbound HTTPS request to `https://api.ipify.org` to auto-detect the VPS's public IPv4 and pre-fill the client endpoint. That's the only network call it ever makes on its own — no telemetry, no update checks.
-
-To skip it entirely, set `TR_ENDPOINT` (or `-endpoint`) to your public `host[:port]` before the first start; the lookup is then never made. You can also just clear or override the endpoint in Settings at any time.
 
 ## Building from source
 

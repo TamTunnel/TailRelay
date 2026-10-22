@@ -13,7 +13,7 @@
 
 {{range .Clients}}
 <section class="card client">
-<h2><code>{{.Name}}</code> <span class="dim">{{.Address}}{{if .AddressV6}}, {{.AddressV6}}{{end}} · added {{.Created}}</span></h2>
+<h2><code>{{.Name}}</code> <span class="dim">{{.Address}} · added {{.Created}}</span></h2>
 <div class="client-grid">
 <div>
 <img src="/qr/{{.Name}}" alt="QR code for {{.Name}}" width="220" height="220">
@@ -26,7 +26,7 @@
 <input name="new_name" required pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,31}" placeholder="new name">
 <button type="submit">Rename</button>
 </form>
-<form method="post" action="/clients/delete" data-confirm="Remove client {{.Name}}? Its keys stop working immediately.">
+<form method="post" action="/clients/delete" onsubmit="return confirm('Remove client {{.Name}}? Its keys stop working immediately.')">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <input type="hidden" name="name" value="{{.Name}}">
 <button class="danger" type="submit">Remove</button>

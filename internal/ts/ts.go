@@ -31,9 +31,6 @@ type Status struct {
 	Hostname      string   // this node's tailnet hostname
 	IPs           []string // this node's tailnet IPs
 	UsingExitNode bool
-	// ExitNodeName identifies the selected exit node: its tailnet hostname
-	// when known, else the stable node ID. "" when no exit node is in use.
-	ExitNodeName string
 }
 
 // rawStatus mirrors only the fields we need from `tailscale status --json`.
@@ -45,11 +42,7 @@ type rawStatus struct {
 		TailscaleIPs []string `json:"TailscaleIPs"`
 	} `json:"Self"`
 	ExitNodeStatus *struct {
-		ID       string `json:"ID"`
-		Online   bool   `json:"Online"`
-		Hostinfo *struct {
-			HostName string `json:"HostName"`
-		} `json:"Hostinfo"`
+		Online bool `json:"Online"`
 	} `json:"ExitNodeStatus"`
 }
 
@@ -66,11 +59,6 @@ func ParseStatus(data []byte) (*Status, error) {
 	}
 	if raw.ExitNodeStatus != nil {
 		st.UsingExitNode = raw.ExitNodeStatus.Online
-		if raw.ExitNodeStatus.Hostinfo != nil && raw.ExitNodeStatus.Hostinfo.HostName != "" {
-			st.ExitNodeName = raw.ExitNodeStatus.Hostinfo.HostName
-		} else {
-			st.ExitNodeName = raw.ExitNodeStatus.ID
-		}
 	}
 	return st, nil
 }
@@ -124,11 +112,8 @@ func ParseExitNodeList(data []byte) []ExitNode {
 }
 
 // ExitNodes lists exit-node candidates. Tries --json first, falls back to
-// the classic text table for older tailscale versions. The selected
-// argument (hostname or node ID, from Status.ExitNodeName) marks the
-// currently selected node — the --json list itself carries no selection
-// state, unlike the text table.
-func ExitNodes(ctx context.Context, run Runner, selected string) ([]ExitNode, error) {
+// the classic text table for older tailscale versions.
+func ExitNodes(ctx context.Context, run Runner) ([]ExitNode, error) {
 	if out, err := run(ctx, "tailscale", "exit-node", "list", "--json"); err == nil {
 		var payload struct {
 			ExitNodes []struct {
@@ -149,7 +134,6 @@ func ExitNodes(ctx context.Context, run Runner, selected string) ([]ExitNode, er
 				if len(e.Addresses) > 0 {
 					n.IP = strings.Split(e.Addresses[0], "/")[0]
 				}
-				n.Selected = selected != "" && (n.Hostname == selected || e.ID == selected)
 				nodes = append(nodes, n)
 			}
 			return nodes, nil
