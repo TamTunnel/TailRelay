@@ -1,0 +1,5 @@
+tailrelay
+*.log
+/var/lib/tailrelay/
+state.json
+.git/

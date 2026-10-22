@@ -1,0 +1,42 @@
+# Tailrelay in Docker.
+#
+# Requirements on the host:
+#   - tailscaled installed AND logged in (the container reuses the host daemon)
+#   - the tailscale CLI available to mount (usually /usr/bin/tailscale)
+#
+# The container needs host networking + NET_ADMIN because it creates the wg0
+# interface and iptables rules on the HOST network stack. There is no
+# meaningful isolation here by design — if you want isolation, use the
+# static binary instead (see README "Docker vs binary").
+services:
+  tailrelay:
+    build:
+      context: .
+      args:
+        VERSION: "0.1.0"
+    image: ghcr.io/tamtunnel/tailrelay:0.1.0
+    container_name: tailrelay
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      net.ipv4.ip_forward: 1
+      net.ipv6.conf.all.forwarding: 1
+    volumes:
+      # persisted state (private keys!) and generated wg0.conf
+      - tailrelay-state:/var/lib/tailrelay
+      - ./wg0.conf:/etc/wireguard/wg0.conf
+      # talk to the HOST's tailscaled; mount the host CLI so versions match
+      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+      - /usr/bin/tailscale:/usr/local/bin/tailscale:ro
+    environment:
+      # default: bind to the tailnet IP only (no password needed).
+      # To expose publicly instead, set TR_BIND_ADDR=0.0.0.0 AND TR_ADMIN_PASSWORD.
+      - TR_PORT=8080
+      # - TR_ADMIN_PASSWORD=change-me
+    restart: unless-stopped
+
+volumes:
+  tailrelay-state:

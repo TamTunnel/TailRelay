@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"regexp"
@@ -23,62 +22,6 @@ var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$`)
 
 func validName(n string) bool { return nameRe.MatchString(n) }
 
-var labelRe = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
-
-// validHost reports whether h is a valid IP or DNS hostname (no
-// whitespace/newlines — these values are rendered into client .conf files).
-func validHost(h string) bool {
-	if h == "" || len(h) > 253 {
-		return false
-	}
-	if ip := net.ParseIP(h); ip != nil {
-		return true
-	}
-	for _, label := range strings.Split(h, ".") {
-		if !labelRe.MatchString(label) {
-			return false
-		}
-	}
-	return true
-}
-
-// validEndpoint reports whether s is empty or host[:port].
-func validEndpoint(s string) bool {
-	if s == "" {
-		return true
-	}
-	host, port, err := net.SplitHostPort(s)
-	if err != nil {
-		host, port = s, "" // no port present
-	}
-	if port != "" {
-		p, perr := strconv.Atoi(port)
-		if perr != nil || p < 1 || p > 65535 {
-			return false
-		}
-	}
-	return validHost(host)
-}
-
-// validAllowedIPs reports whether s is a comma-separated list of CIDRs.
-// Raw CR/LF is rejected outright: the value is rendered verbatim into
-// client .conf files, so a newline here would inject config lines.
-func validAllowedIPs(s string) bool {
-	if strings.ContainsAny(s, "\r\n") {
-		return false
-	}
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			return false
-		}
-		if _, _, err := net.ParseCIDR(part); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
 func findClient(st *state.State, name string) *state.Client {
 	for i := range st.Clients {
 		if st.Clients[i].Name == name {
@@ -91,21 +34,8 @@ func findClient(st *state.State, name string) *state.Client {
 type peerView struct {
 	Name          string
 	Address       string
-	AddressV6     string
 	LastHandshake string
 	Rx, Tx        string
-}
-
-// shortErr trims a runner error for UI display (first line only).
-func shortErr(err error) string {
-	msg := err.Error()
-	if i := strings.Index(msg, "\n"); i >= 0 {
-		msg = msg[:i]
-	}
-	if len(msg) > 120 {
-		msg = msg[:117] + "..."
-	}
-	return msg
 }
 
 func humanBytes(n uint64) string {
@@ -133,21 +63,10 @@ type dashboardData struct {
 		Pool       string
 		ServerPub  string
 	}
-	Peers []peerView
-	TS    ts.Status
-	// TSVersion is the bundled tailscaled version (`tailscale version`),
-	// "" when unreachable. Makes a stale Tailscale visible in the UI.
-	TSVersion string
+	Peers     []peerView
+	TS        ts.Status
 	Routes    string
 	ExitNodes []ts.ExitNode
-	// ExitNodeWarning is set when a pinned exit node is down or not
-	// active: relayed traffic is fail-closed (stopped), recovery manual.
-	ExitNodeWarning string
-	// Kill-switch status: label + pill class ("ok"/"warn"), plus a leak
-	// note when the switch is off.
-	KillSwitchLabel    string
-	KillSwitchPill     string
-	KillSwitchLeakNote bool
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
@@ -173,14 +92,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dump, derr := s.d.WG.Dump(ctx)
-	if derr != nil {
-		data.WG.Up = false
-		data.WG.DownReason = "wireguard interface not responding (" + shortErr(derr) + ")"
-	} else {
+	if derr == nil && len(dump) >= 0 {
 		data.WG.Up = true
 	}
+	if !data.WG.Up {
+		data.WG.DownReason = "interface not found (needs NET_ADMIN / root)"
+	}
 	for _, c := range st.Clients {
-		pv := peerView{Name: c.Name, Address: c.Address, AddressV6: c.AddressV6}
+		pv := peerView{Name: c.Name, Address: c.Address}
 		if info, ok := dump[c.PublicKey]; ok {
 			if !info.LastHandshake.IsZero() {
 				pv.LastHandshake = info.LastHandshake.Local().Format("Jan 2 15:04")
@@ -191,79 +110,18 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(data.Peers, func(i, j int) bool { return data.Peers[i].Name < data.Peers[j].Name })
 
-	tsHealthy := false // tailscaled up AND the tailscale interface exists
 	if tstat, terr := ts.GetStatus(ctx, s.d.TS); terr == nil {
 		data.TS = *tstat
 		data.Routes = st.Settings.Routes
 		if tstat.Running {
-			tsHealthy = s.d.WG.TSIfaceExists(ctx)
-			selected := tstat.ExitNodeName
-			if selected == "" {
-				selected = st.Settings.ExitNode // fall back to the stored choice
-			}
-			if nodes, nerr := ts.ExitNodes(ctx, s.d.TS, selected); nerr == nil {
-				// The --json list path marks every candidate online; the
-				// status payload is authoritative for the *selected* node's
-				// real state (it knows when the pinned node went down).
-				for i := range nodes {
-					if nodes[i].Selected {
-						nodes[i].Online = tstat.UsingExitNode
-					}
-				}
+			if nodes, nerr := ts.ExitNodes(ctx, s.d.TS); nerr == nil {
 				data.ExitNodes = nodes
-				data.ExitNodeWarning = exitNodeWarning(st.Settings.ExitNode, nodes)
 			}
 		}
 	} else {
 		data.TS.BackendState = "unreachable"
 	}
-	// Tailscale version is independent of login state; `tailscale version`
-	// works even when tailscaled needs login (or is down -> "").
-	data.TSVersion = ts.Version(ctx, s.d.TS)
-	// Kill-switch status: on+healthy = tunneling; on+down = paused
-	// (traffic dropped, not leaked); off = leak risk, said plainly.
-	switch {
-	case st.Settings.KillSwitch && tsHealthy:
-		data.KillSwitchLabel, data.KillSwitchPill = "Active & tunneling", "ok"
-	case st.Settings.KillSwitch:
-		data.KillSwitchLabel, data.KillSwitchPill = "Paused — Tailscale down", "warn"
-	default:
-		data.KillSwitchLabel, data.KillSwitchPill = "Kill switch off", "warn"
-		data.KillSwitchLeakNote = true
-	}
 	s.render(w, "dashboard.html", data)
-}
-
-// exitNodeWarning reports a fail-closed warning when an exit node is
-// pinned but not actively relaying: the node went offline (traffic is
-// stopped — never silently rerouted to another node, which would change
-// egress IP/location) or it vanished from the candidate list. "" means
-// healthy, or no pin set. Recovery is always manual via the picker.
-// If the pinned node exists in the list but isn't marked Selected yet,
-// it's likely a transitional state (Tailscale still switching) — don't warn.
-func exitNodeWarning(pin string, nodes []ts.ExitNode) string {
-	if pin == "" {
-		return ""
-	}
-	pinExists := false
-	for _, n := range nodes {
-		// Flexible match: pin may be short hostname, full MagicDNS, or node ID.
-		if n.Hostname == pin || strings.HasSuffix(pin, "."+n.Hostname) || strings.HasSuffix(n.Hostname, "."+pin) {
-			pinExists = true
-		}
-		if n.Selected {
-			if n.Online {
-				return ""
-			}
-			return fmt.Sprintf("exit node %q is OFFLINE — WireGuard traffic is fail-closed (stopped, not rerouted). Pick another node below to restore the relay; recovery is manual by design", n.Hostname)
-		}
-	}
-	// No node Selected. If the pin exists in the list, Tailscale is likely
-	// still switching — don't false-alarm. Only warn if the pin is gone.
-	if pinExists {
-		return ""
-	}
-	return fmt.Sprintf("pinned exit node %q is not active — traffic is fail-closed (stopped). Pick a node below to restore the relay", pin)
 }
 
 // --- clients ---
@@ -271,10 +129,8 @@ func exitNodeWarning(pin string, nodes []ts.ExitNode) string {
 type clientView struct {
 	Name      string
 	Address   string
-	AddressV6 string
 	Created   string
 	PublicKey string
-	Config    string
 }
 
 type clientsData struct {
@@ -291,16 +147,10 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	}
 	data := clientsData{pageData: s.baseData(w, r, "Clients"), Pool: st.Settings.PoolCIDR}
 	for _, c := range st.Clients {
-		conf, cerr := wg.RenderClientConfig(st, c)
-		if cerr != nil {
-			http.Error(w, cerr.Error(), http.StatusInternalServerError)
-			return
-		}
 		data.Clients = append(data.Clients, clientView{
-			Name: c.Name, Address: c.Address, AddressV6: c.AddressV6,
+			Name: c.Name, Address: c.Address,
 			Created:   c.CreatedAt.Local().Format("2006-01-02"),
 			PublicKey: c.PublicKey,
-			Config:    conf,
 		})
 	}
 	sort.Slice(data.Clients, func(i, j int) bool { return data.Clients[i].Name < data.Clients[j].Name })
@@ -328,9 +178,6 @@ func (s *Server) handleClientAdd(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		added = fmt.Sprintf("%s (%s)", c.Name, c.Address)
-		if c.AddressV6 != "" {
-			added = fmt.Sprintf("%s (%s, %s)", c.Name, c.Address, c.AddressV6)
-		}
 		return nil
 	})
 	if err != nil {
@@ -475,23 +322,15 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 	listenPort, _ := strconv.Atoi(r.FormValue("listen_port"))
 	ns := state.Settings{
 		PoolCIDR:         strings.TrimSpace(r.FormValue("pool_cidr")),
-		IPv6Pool:         strings.TrimSpace(r.FormValue("ipv6_pool")),
 		DNS:              strings.TrimSpace(r.FormValue("dns")),
 		MTU:              mtu,
 		Keepalive:        keepalive,
 		ListenPort:       listenPort,
 		Endpoint:         strings.TrimSpace(r.FormValue("endpoint")),
 		ClientAllowedIPs: strings.TrimSpace(r.FormValue("client_allowed_ips")),
-		// Unchecked checkboxes don't submit — absence means off.
-		KillSwitch: r.FormValue("kill_switch") == "1",
 	}
 	if _, _, err := net.ParseCIDR(ns.PoolCIDR); err != nil {
 		redirectErr(w, r, "/settings", fmt.Errorf("bad pool CIDR: %w", err))
-		return
-	}
-	// Empty IPv6 pool = dual-stack disabled (documented, allowed).
-	if !state.ValidIPv6Pool(ns.IPv6Pool) {
-		redirectErr(w, r, "/settings", fmt.Errorf("bad IPv6 pool %q: must be empty or an IPv6 CIDR (e.g. fd12:3456:789a::/64)", ns.IPv6Pool))
 		return
 	}
 	if mtu < 1280 || mtu > 9000 {
@@ -506,46 +345,7 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		redirectErr(w, r, "/settings", fmt.Errorf("DNS and AllowedIPs are required"))
 		return
 	}
-	if !validHost(ns.DNS) {
-		redirectErr(w, r, "/settings", fmt.Errorf("bad DNS %q: must be an IP or hostname", ns.DNS))
-		return
-	}
-	if !validEndpoint(ns.Endpoint) {
-		redirectErr(w, r, "/settings", fmt.Errorf("bad endpoint %q: must be host or host:port", ns.Endpoint))
-		return
-	}
-	if !validAllowedIPs(ns.ClientAllowedIPs) {
-		redirectErr(w, r, "/settings", fmt.Errorf("bad AllowedIPs %q: must be comma-separated CIDRs", ns.ClientAllowedIPs))
-		return
-	}
-	// Changing either pool orphans existing clients (they keep old IPs while
-	// the server moves to .1/::1 of the new pool). Refuse until they're gone.
-	// This also covers enabling/disabling IPv6: existing clients have no v6
-	// address to keep, so the change is only safe with zero clients.
-	cur, err := s.d.Store.Load()
-	if err != nil {
-		redirectErr(w, r, "/settings", fmt.Errorf("loading state: %w", err))
-		return
-	}
-	if ns.PoolCIDR != cur.Settings.PoolCIDR && len(cur.Clients) > 0 {
-		redirectErr(w, r, "/settings", fmt.Errorf(
-			"cannot change the IP pool while %d client(s) exist — remove them first, then change the pool and re-add", len(cur.Clients)))
-		return
-	}
-	if ns.IPv6Pool != cur.Settings.IPv6Pool && len(cur.Clients) > 0 {
-		redirectErr(w, r, "/settings", fmt.Errorf(
-			"cannot change the IPv6 pool while %d client(s) exist — remove them first, then change the pool and re-add", len(cur.Clients)))
-		return
-	}
-	// Keep the untouched default AllowedIPs in sync with the v6 toggle:
-	// disabling v6 with "::/0" still present would blackhole client IPv6.
-	if ns.IPv6Pool == "" && ns.ClientAllowedIPs == "0.0.0.0/0, ::/0" {
-		ns.ClientAllowedIPs = "0.0.0.0/0"
-	}
-	if ns.IPv6Pool != "" && ns.ClientAllowedIPs == "0.0.0.0/0" {
-		ns.ClientAllowedIPs = "0.0.0.0/0, ::/0"
-	}
-	err = s.d.Store.Update(func(st *state.State) error {
+	err := s.d.Store.Update(func(st *state.State) error {
 		keep := st.Settings.ExitNode
 		routes := st.Settings.Routes
 		st.Settings = ns
@@ -568,33 +368,16 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleExitNode(w http.ResponseWriter, r *http.Request) {
 	node := strings.TrimSpace(r.FormValue("node"))
-	// Pin by MagicDNS name only, never by tailnet IP: an `auto:any`-style
-	// or IP-based pin would let egress silently hop between nodes. The
-	// picker only offers concrete names; reject anything else outright.
-	if node != "" && net.ParseIP(node) != nil {
-		redirectErr(w, r, "/", fmt.Errorf("exit node must be a tailnet hostname, not an IP address"))
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	if err := ts.SetExitNode(ctx, s.d.TS, node); err != nil {
 		redirectErr(w, r, "/", fmt.Errorf("tailscale set --exit-node: %w", err))
 		return
 	}
-	if err := s.d.Store.Update(func(st *state.State) error {
+	_ = s.d.Store.Update(func(st *state.State) error {
 		st.Settings.ExitNode = node
 		return nil
-	}); err != nil {
-		log.Printf("warning: persisting exit-node choice: %v", err)
-	}
-	// Re-apply WireGuard NAT/FORWARD rules for the new mode: switching
-	// between exit-node and direct changes which interface gets MASQUERADE
-	// and FORWARD rules. Without this, the rules stay stuck on the old mode
-	// and the new mode has no forwarding path.
-	if err := s.applyWG(r.Context()); err != nil {
-		redirectErr(w, r, "/", fmt.Errorf("exit node set but interface re-apply failed: %w", err))
-		return
-	}
+	})
 	if node == "" {
 		redirectMsg(w, r, "/", "exit node cleared")
 	} else {
@@ -610,12 +393,10 @@ func (s *Server) handleRoutes(w http.ResponseWriter, r *http.Request) {
 		redirectErr(w, r, "/", fmt.Errorf("tailscale set --advertise-routes: %w", err))
 		return
 	}
-	if err := s.d.Store.Update(func(st *state.State) error {
+	_ = s.d.Store.Update(func(st *state.State) error {
 		st.Settings.Routes = routes
 		return nil
-	}); err != nil {
-		log.Printf("warning: persisting advertised routes: %v", err)
-	}
+	})
 	redirectMsg(w, r, "/", "advertised routes updated")
 }
 
@@ -627,11 +408,7 @@ func (s *Server) handleTailscaleUp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := ts.Up(r.Context(), s.d.TS, authKey, hostname); err != nil {
-		// Belt-and-braces: never echo the raw CLI error into the ?err=
-		// redirect. Even with --authkey redacted by the runner, secrets
-		// have no business in URLs, browser history, or proxy logs.
-		log.Printf("tailscale up failed: %v", err)
-		redirectErr(w, r, "/", fmt.Errorf("tailscale up failed — check that tailscaled is running and the auth key is valid"))
+		redirectErr(w, r, "/", fmt.Errorf("tailscale up: %w", err))
 		return
 	}
 	redirectMsg(w, r, "/", "tailscale is up")

@@ -17,44 +17,26 @@ import (
 // Config holds runtime configuration. WireGuard/Tailscale network settings
 // live in the state file (editable via the web UI); this is process config.
 type Config struct {
-	BindAddr       string // address the web UI listens on
-	Port           int    // web UI port
-	PasswordHash   []byte // bcrypt hash of the admin password, nil = no auth
-	StatePath      string // /var/lib/tailrelay/state.json
-	ConfPath       string // /etc/wireguard/wg0.conf
-	Iface          string // wg0
-	TailscaleIface string // tailscale0: interface WireGuard traffic is NATed onto
-	// InitialEndpoint pre-seeds the client-facing endpoint on first run,
-	// skipping the api.ipify.org auto-detection (see README "Privacy").
-	InitialEndpoint string
-	// InitialIPv6Pool pre-seeds the IPv6 ULA pool on first run. Empty means
-	// "generate a random ULA /64". Validation happens in ensureState.
-	InitialIPv6Pool string
-	// TLSCert/TLSKey enable HTTPS for the web UI. Both must be set together;
-	// public (0.0.0.0) binds without TLS expose the password in cleartext.
-	TLSCert string
-	TLSKey  string
+	BindAddr     string // address the web UI listens on
+	Port         int    // web UI port
+	PasswordHash []byte // bcrypt hash of the admin password, nil = no auth
+	StatePath    string // /var/lib/tailrelay/state.json
+	ConfPath     string // /etc/wireguard/wg0.conf
+	Iface        string // wg0
 }
 
 // Defaults.
 const (
-	DefaultPort           = 8080
-	DefaultStatePath      = "/var/lib/tailrelay/state.json"
-	DefaultConfPath       = "/etc/wireguard/wg0.conf"
-	DefaultIface          = "wg0"
-	DefaultTailscaleIface = "tailscale0"
+	DefaultPort      = 8080
+	DefaultStatePath = "/var/lib/tailrelay/state.json"
+	DefaultConfPath  = "/etc/wireguard/wg0.conf"
+	DefaultIface     = "wg0"
 )
 
 // tailnetIPv4 reports whether addr is inside the Tailscale CGNAT range.
 func tailnetIPv4(ip net.IP) bool {
 	_, tailnet, _ := net.ParseCIDR("100.64.0.0/10")
 	return tailnet.Contains(ip)
-}
-
-// inContainer reports whether we're running inside a Docker container.
-func inContainer() bool {
-	_, err := os.Stat("/.dockerenv")
-	return err == nil
 }
 
 // publicBind reports whether binding bindAddr would expose the UI beyond the
@@ -65,11 +47,6 @@ func publicBind(bindAddr string) bool {
 		return true // hostname: resolve conservatively -> treat as public
 	}
 	if ip.IsLoopback() || tailnetIPv4(ip) {
-		return false
-	}
-	// In a container, 0.0.0.0 is not public: Docker's port publishes control
-	// exposure, not the bind address.
-	if inContainer() && ip.IsUnspecified() {
 		return false
 	}
 	if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
@@ -89,11 +66,6 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 	statePath := fs.String("state", "", "path to state.json")
 	confPath := fs.String("conf", "", "path to write wg0.conf")
 	iface := fs.String("iface", "", "wireguard interface name")
-	tsIface := fs.String("ts-iface", "", "tailscale interface name for NAT (default tailscale0)")
-	endpoint := fs.String("endpoint", "", "initial public endpoint host[:port]; skips ipify auto-detection")
-	ipv6pool := fs.String("ipv6-pool", "", "initial IPv6 ULA pool CIDR (default: random fd..::/64); empty value handling is in ensureState")
-	tlsCert := fs.String("tls-cert", "", "TLS certificate file for the web UI (requires -tls-key)")
-	tlsKey := fs.String("tls-key", "", "TLS private key file for the web UI (requires -tls-cert)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
@@ -112,13 +84,7 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 
 	c.BindAddr = getenv(*bind, "TR_BIND_ADDR", "")
 	if c.BindAddr == "" {
-		if inContainer() {
-			// In a container, bind to all interfaces: the tailnet IP can
-			// change (admin console, re-auth), and Docker's port publishes
-			// control exposure, not the bind address. Never hardcode the
-			// IP discovered at startup.
-			c.BindAddr = "0.0.0.0"
-		} else if tailscaleIP != "" {
+		if tailscaleIP != "" {
 			c.BindAddr = tailscaleIP
 		} else {
 			c.BindAddr = "127.0.0.1"
@@ -136,14 +102,6 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 	c.StatePath = getenv(*statePath, "TR_STATE_PATH", DefaultStatePath)
 	c.ConfPath = getenv(*confPath, "TR_CONF_PATH", DefaultConfPath)
 	c.Iface = getenv(*iface, "TR_IFACE", DefaultIface)
-	c.TailscaleIface = getenv(*tsIface, "TR_TAILSCALE_IFACE", DefaultTailscaleIface)
-	c.InitialEndpoint = getenv(*endpoint, "TR_ENDPOINT", "")
-	c.InitialIPv6Pool = strings.TrimSpace(getenv(*ipv6pool, "TR_IPV6_POOL", ""))
-	c.TLSCert = getenv(*tlsCert, "TR_TLS_CERT", "")
-	c.TLSKey = getenv(*tlsKey, "TR_TLS_KEY", "")
-	if (c.TLSCert == "") != (c.TLSKey == "") {
-		return nil, fmt.Errorf("TLS needs both a certificate and a key: set TR_TLS_CERT and TR_TLS_KEY (or neither)")
-	}
 
 	pw := *password
 	if pw == "" {
@@ -164,20 +122,11 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 			"refusing to bind %s without a password: set TR_ADMIN_PASSWORD or bind to the tailscale IP / localhost",
 			c.BindAddr)
 	}
-	if publicBind(c.BindAddr) && !c.TLSEnabled() {
-		// Not a refusal (password is set, and a reverse proxy may terminate
-		// TLS), but loud: without TLS the password and session cookie cross
-		// the wire in cleartext.
-		fmt.Fprintf(os.Stderr, "WARNING: public bind %s without TLS — admin password and session cookie travel in cleartext; set TR_TLS_CERT/TR_TLS_KEY or terminate TLS in a reverse proxy\n", c.BindAddr)
-	}
 	return c, nil
 }
 
 // Addr returns host:port for net/http.
 func (c *Config) Addr() string { return net.JoinHostPort(c.BindAddr, strconv.Itoa(c.Port)) }
-
-// TLSEnabled reports whether the web UI serves HTTPS.
-func (c *Config) TLSEnabled() bool { return c.TLSCert != "" && c.TLSKey != "" }
 
 // Redacted describes the effective config without secrets, for logging.
 func (c *Config) Redacted() string {
@@ -185,12 +134,8 @@ func (c *Config) Redacted() string {
 	if len(c.PasswordHash) > 0 {
 		auth = "password"
 	}
-	tls := "off"
-	if c.TLSEnabled() {
-		tls = "on"
-	}
-	return fmt.Sprintf("bind=%s auth=%s tls=%s state=%s conf=%s iface=%s ts-iface=%s",
-		c.Addr(), auth, tls, c.StatePath, c.ConfPath, c.Iface, c.TailscaleIface)
+	return fmt.Sprintf("bind=%s auth=%s state=%s conf=%s iface=%s",
+		c.Addr(), auth, c.StatePath, c.ConfPath, c.Iface)
 }
 
 // ListenEnvHint documents every supported variable for README/--help reuse.
@@ -202,10 +147,5 @@ func ListenEnvHint() string {
 		"TR_STATE_PATH    state file path (default /var/lib/tailrelay/state.json)",
 		"TR_CONF_PATH     generated wg0.conf path (default /etc/wireguard/wg0.conf)",
 		"TR_IFACE         wireguard interface name (default wg0)",
-		"TR_TAILSCALE_IFACE tailscale interface NAT target (default tailscale0)",
-		"TR_ENDPOINT      initial endpoint host[:port]; skips the ipify.org lookup on first run",
-		"TR_IPV6_POOL     initial IPv6 ULA pool CIDR on first run (default: random fd..::/64)",
-		"TR_TLS_CERT      TLS certificate file for the web UI (needs TR_TLS_KEY)",
-		"TR_TLS_KEY       TLS private key file for the web UI (needs TR_TLS_CERT)",
 	}, "\n")
 }
