@@ -4,8 +4,10 @@
 package state
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,19 +20,21 @@ type Client struct {
 	PrivateKey   string    `json:"private_key"`
 	PublicKey    string    `json:"public_key"`
 	PresharedKey string    `json:"preshared_key"`
-	Address      string    `json:"address"`
+	Address      string    `json:"address"`              // IPv4 address, e.g. 10.7.0.2
+	AddressV6    string    `json:"address_v6,omitempty"` // IPv6 address, e.g. fd12:3456:789a::2 ("" = none)
 	CreatedAt    time.Time `json:"created_at"`
 }
 
 // Settings are the tunable WireGuard/Tailscale knobs, editable in the UI.
 type Settings struct {
 	PoolCIDR         string `json:"pool_cidr"`          // e.g. 10.7.0.0/24
+	IPv6Pool         string `json:"ipv6_pool"`          // e.g. fd12:3456:789a::/64; "" = IPv6 disabled
 	DNS              string `json:"dns"`                // client DNS, e.g. 1.1.1.1
 	MTU              int    `json:"mtu"`                // client + interface MTU
 	Keepalive        int    `json:"keepalive"`          // PersistentKeepalive seconds
 	ListenPort       int    `json:"listen_port"`        // server UDP port
 	Endpoint         string `json:"endpoint"`           // host:port clients connect to
-	ClientAllowedIPs string `json:"client_allowed_ips"` // default 0.0.0.0/0 (IPv4-only; server has no IPv6 pool)
+	ClientAllowedIPs string `json:"client_allowed_ips"` // default 0.0.0.0/0, ::/0 when the IPv6 pool is enabled
 	ExitNode         string `json:"exit_node"`          // desired tailscale exit node (hostname), "" = none
 	Routes           string `json:"routes"`             // routes to advertise, comma-separated
 	// KillSwitch drops any WireGuard traffic not headed for the tailscale
@@ -47,10 +51,13 @@ type State struct {
 	Clients          []Client `json:"clients"`
 }
 
-// DefaultSettings returns sane first-run settings.
+// DefaultSettings returns sane first-run settings. IPv6Pool is empty here:
+// first init (see cmd/tailrelay ensureState) fills it with a random ULA /64
+// (or the TR_IPV6_POOL override) and upgrades ClientAllowedIPs to dual-stack.
 func DefaultSettings() Settings {
 	return Settings{
 		PoolCIDR:         "10.7.0.0/24",
+		IPv6Pool:         "",
 		DNS:              "1.1.1.1",
 		MTU:              1420,
 		Keepalive:        25,
@@ -61,6 +68,33 @@ func DefaultSettings() Settings {
 		Routes:           "",
 		KillSwitch:       true,
 	}
+}
+
+// RandomULAPool generates a random unique-local /64 (fd00::/8 + 40 random
+// bits, per RFC 4193), e.g. fd3a:9c1e:77b2::/64. WG Easy-style: every
+// install gets its own private v6 space, no coordination needed.
+func RandomULAPool() (string, error) {
+	var b [5]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("generating ULA: %w", err)
+	}
+	ip := net.IP([]byte{
+		0xfd, b[0], b[1], b[2], b[3], b[4],
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+	})
+	return ip.String() + "/64", nil
+}
+
+// ValidIPv6Pool reports whether s is empty (IPv6 disabled) or a valid IPv6 CIDR.
+func ValidIPv6Pool(s string) bool {
+	if s == "" {
+		return true
+	}
+	_, ipnet, err := net.ParseCIDR(s)
+	if err != nil {
+		return false
+	}
+	return ipnet.IP.To4() == nil
 }
 
 // Store is a concurrency-safe JSON file store with atomic writes.

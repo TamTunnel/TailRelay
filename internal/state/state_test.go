@@ -1,8 +1,10 @@
 package state
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,5 +98,47 @@ func TestLoadMissing(t *testing.T) {
 func TestDefaultSettingsIPv4Only(t *testing.T) {
 	if got := DefaultSettings().ClientAllowedIPs; got != "0.0.0.0/0" {
 		t.Errorf("default ClientAllowedIPs = %q, want 0.0.0.0/0 (server is IPv4-only)", got)
+	}
+}
+
+func TestRandomULAPool(t *testing.T) {
+	a, err := RandomULAPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip, ipnet, err := net.ParseCIDR(a)
+	if err != nil {
+		t.Fatalf("not a valid CIDR: %q", a)
+	}
+	if ones, _ := ipnet.Mask.Size(); ones != 64 {
+		t.Errorf("mask = /%d, want /64", ones)
+	}
+	if ip[0] != 0xfd {
+		t.Errorf("first byte = %#02x, want 0xfd (ULA)", ip[0])
+	}
+	// Global ID must be 40 random bits: two pools must differ.
+	b, err := RandomULAPool()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Error("two generated ULA pools are identical")
+	}
+	// Must be a ULA, not overlapping anything routable.
+	if !strings.HasPrefix(a, "fd") {
+		t.Errorf("pool %q does not look like a ULA", a)
+	}
+}
+
+func TestValidIPv6Pool(t *testing.T) {
+	for _, ok := range []string{"", "fd12:3456:789a::/64", "fd00::/48", "2001:db8::/32"} {
+		if !ValidIPv6Pool(ok) {
+			t.Errorf("ValidIPv6Pool(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{"10.7.0.0/24", "not-a-cidr", "fd12::/64\n", "fd12:3456:789a::2/128\nInjected"} {
+		if ValidIPv6Pool(bad) {
+			t.Errorf("ValidIPv6Pool(%q) = true, want false", bad)
+		}
 	}
 }

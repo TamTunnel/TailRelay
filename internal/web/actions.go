@@ -91,6 +91,7 @@ func findClient(st *state.State, name string) *state.Client {
 type peerView struct {
 	Name          string
 	Address       string
+	AddressV6     string
 	LastHandshake string
 	Rx, Tx        string
 }
@@ -176,7 +177,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		data.WG.Up = true
 	}
 	for _, c := range st.Clients {
-		pv := peerView{Name: c.Name, Address: c.Address}
+		pv := peerView{Name: c.Name, Address: c.Address, AddressV6: c.AddressV6}
 		if info, ok := dump[c.PublicKey]; ok {
 			if !info.LastHandshake.IsZero() {
 				pv.LastHandshake = info.LastHandshake.Local().Format("Jan 2 15:04")
@@ -252,6 +253,7 @@ func exitNodeWarning(pin string, nodes []ts.ExitNode) string {
 type clientView struct {
 	Name      string
 	Address   string
+	AddressV6 string
 	Created   string
 	PublicKey string
 }
@@ -271,7 +273,7 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	data := clientsData{pageData: s.baseData(w, r, "Clients"), Pool: st.Settings.PoolCIDR}
 	for _, c := range st.Clients {
 		data.Clients = append(data.Clients, clientView{
-			Name: c.Name, Address: c.Address,
+			Name: c.Name, Address: c.Address, AddressV6: c.AddressV6,
 			Created:   c.CreatedAt.Local().Format("2006-01-02"),
 			PublicKey: c.PublicKey,
 		})
@@ -301,6 +303,9 @@ func (s *Server) handleClientAdd(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		added = fmt.Sprintf("%s (%s)", c.Name, c.Address)
+		if c.AddressV6 != "" {
+			added = fmt.Sprintf("%s (%s, %s)", c.Name, c.Address, c.AddressV6)
+		}
 		return nil
 	})
 	if err != nil {
@@ -445,6 +450,7 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 	listenPort, _ := strconv.Atoi(r.FormValue("listen_port"))
 	ns := state.Settings{
 		PoolCIDR:         strings.TrimSpace(r.FormValue("pool_cidr")),
+		IPv6Pool:         strings.TrimSpace(r.FormValue("ipv6_pool")),
 		DNS:              strings.TrimSpace(r.FormValue("dns")),
 		MTU:              mtu,
 		Keepalive:        keepalive,
@@ -456,6 +462,11 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, _, err := net.ParseCIDR(ns.PoolCIDR); err != nil {
 		redirectErr(w, r, "/settings", fmt.Errorf("bad pool CIDR: %w", err))
+		return
+	}
+	// Empty IPv6 pool = dual-stack disabled (documented, allowed).
+	if !state.ValidIPv6Pool(ns.IPv6Pool) {
+		redirectErr(w, r, "/settings", fmt.Errorf("bad IPv6 pool %q: must be empty or an IPv6 CIDR (e.g. fd12:3456:789a::/64)", ns.IPv6Pool))
 		return
 	}
 	if mtu < 1280 || mtu > 9000 {
@@ -482,8 +493,10 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		redirectErr(w, r, "/settings", fmt.Errorf("bad AllowedIPs %q: must be comma-separated CIDRs", ns.ClientAllowedIPs))
 		return
 	}
-	// Changing the pool orphans existing clients (they keep old IPs while
-	// the server moves to .1 of the new pool). Refuse until they're gone.
+	// Changing either pool orphans existing clients (they keep old IPs while
+	// the server moves to .1/::1 of the new pool). Refuse until they're gone.
+	// This also covers enabling/disabling IPv6: existing clients have no v6
+	// address to keep, so the change is only safe with zero clients.
 	cur, err := s.d.Store.Load()
 	if err != nil {
 		redirectErr(w, r, "/settings", fmt.Errorf("loading state: %w", err))
@@ -493,6 +506,19 @@ func (s *Server) handleSettingsPost(w http.ResponseWriter, r *http.Request) {
 		redirectErr(w, r, "/settings", fmt.Errorf(
 			"cannot change the IP pool while %d client(s) exist — remove them first, then change the pool and re-add", len(cur.Clients)))
 		return
+	}
+	if ns.IPv6Pool != cur.Settings.IPv6Pool && len(cur.Clients) > 0 {
+		redirectErr(w, r, "/settings", fmt.Errorf(
+			"cannot change the IPv6 pool while %d client(s) exist — remove them first, then change the pool and re-add", len(cur.Clients)))
+		return
+	}
+	// Keep the untouched default AllowedIPs in sync with the v6 toggle:
+	// disabling v6 with "::/0" still present would blackhole client IPv6.
+	if ns.IPv6Pool == "" && ns.ClientAllowedIPs == "0.0.0.0/0, ::/0" {
+		ns.ClientAllowedIPs = "0.0.0.0/0"
+	}
+	if ns.IPv6Pool != "" && ns.ClientAllowedIPs == "0.0.0.0/0" {
+		ns.ClientAllowedIPs = "0.0.0.0/0, ::/0"
 	}
 	err = s.d.Store.Update(func(st *state.State) error {
 		keep := st.Settings.ExitNode
