@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math/big"
 	"net"
 	"os"
@@ -427,18 +428,38 @@ func StripForSetconf(conf string) string {
 }
 
 func (n *NetOps) enableForwarding(ctx context.Context, wantV6 bool) error {
-	if _, err := n.Run(ctx, "sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
-		// Fallback: write procfs directly.
-		if werr := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); werr != nil {
-			return fmt.Errorf("enabling ip_forward: %w (sysctl also failed: %v)", werr, err)
-		}
+	if err := n.ensureSysctl(ctx, "net.ipv4.ip_forward"); err != nil {
+		return err
 	}
 	if wantV6 {
-		if _, err := n.Run(ctx, "sysctl", "-w", "net.ipv6.conf.all.forwarding=1"); err != nil {
-			if werr := os.WriteFile("/proc/sys/net/ipv6/conf/all/forwarding", []byte("1\n"), 0o644); werr != nil {
-				return fmt.Errorf("enabling ipv6 forwarding: %w (sysctl also failed: %v)", werr, err)
-			}
+		// IPv6 forwarding is best-effort: in a container /proc/sys is
+		// typically read-only, and IPv4 operation must not break because
+		// of it. The dashboard/settings surface the resulting state.
+		if err := n.ensureSysctl(ctx, "net.ipv6.conf.all.forwarding"); err != nil {
+			log.Printf("warning: %v", err)
 		}
+	}
+	return nil
+}
+
+// procSysBase is /proc/sys in production; tests point it at a temp dir.
+var procSysBase = "/proc/sys"
+
+// ensureSysctl makes sure a sysctl key reads "1", writing it only when needed.
+// Reading works even when /proc/sys is mounted read-only (the Docker default),
+// so a host that already has the value set — e.g. the Docker daemon enabling
+// net.ipv4.ip_forward at startup — needs no write at all.
+func (n *NetOps) ensureSysctl(ctx context.Context, key string) error {
+	path := procSysBase + "/" + strings.ReplaceAll(key, ".", "/")
+	if b, err := os.ReadFile(path); err == nil && strings.TrimSpace(string(b)) == "1" {
+		return nil
+	}
+	if _, err := n.Run(ctx, "sysctl", "-w", key+"=1"); err == nil {
+		return nil
+	}
+	// Fallback: write procfs directly.
+	if werr := os.WriteFile(path, []byte("1\n"), 0o644); werr != nil {
+		return fmt.Errorf("%s is not enabled and cannot be set from inside the container (read-only /proc/sys); on the host run: sudo sysctl -w %s=1", key, key)
 	}
 	return nil
 }
