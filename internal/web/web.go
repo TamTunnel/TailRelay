@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -25,7 +26,7 @@ import (
 //go:embed templates/*.html
 var templatesFS embed.FS
 
-//go:embed static/style.css
+//go:embed static/style.css static/app.js
 var staticFS embed.FS
 
 // Deps wires the web server to the rest of the app.
@@ -42,12 +43,65 @@ type session struct {
 	expires time.Time
 }
 
+// loginAttempt tracks failed logins from one IP for throttling.
+type loginAttempt struct {
+	count      int
+	lockedTill time.Time
+}
+
 // Server is the Tailrelay web UI.
 type Server struct {
 	d        Deps
 	tmpl     *template.Template
 	mu       sync.Mutex
 	sessions map[string]session
+	loginMu  sync.Mutex
+	logins   map[string]*loginAttempt
+}
+
+// loginBlocked reports whether ip is currently locked out of /login.
+// After 5 failures the IP is locked with exponential backoff (1m, 2m, 4m…
+// capped at 30m). A successful login resets the counter.
+func (s *Server) loginBlocked(ip string) bool {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	a, ok := s.logins[ip]
+	if !ok {
+		return false
+	}
+	return time.Now().Before(a.lockedTill)
+}
+
+func (s *Server) loginFailed(ip string) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	a, ok := s.logins[ip]
+	if !ok {
+		a = &loginAttempt{}
+		s.logins[ip] = a
+	}
+	a.count++
+	if a.count >= 5 {
+		backoff := time.Minute << (a.count - 5) // 1m, 2m, 4m, …
+		if backoff > 30*time.Minute {
+			backoff = 30 * time.Minute
+		}
+		a.lockedTill = time.Now().Add(backoff)
+	}
+}
+
+func (s *Server) loginSucceeded(ip string) {
+	s.loginMu.Lock()
+	defer s.loginMu.Unlock()
+	delete(s.logins, ip)
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 const sessionCookie = "tr_session"
@@ -59,9 +113,11 @@ func NewServer(d Deps) (*Server, http.Handler, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	s := &Server{d: d, tmpl: tmpl, sessions: map[string]session{}}
+	s := &Server{d: d, tmpl: tmpl, sessions: map[string]session{}, logins: map[string]*loginAttempt{}}
+	go s.sweepSessions(15 * time.Minute)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /static/style.css", s.serveCSS)
+	mux.HandleFunc("GET /static/app.js", s.serveJS)
 	mux.HandleFunc("GET /login", s.handleLogin)
 	mux.HandleFunc("POST /login", s.handleLoginPost)
 	mux.HandleFunc("POST /logout", s.handleLogout)
@@ -94,6 +150,10 @@ func securityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		// No inline scripts/styles anywhere (confirm dialogs live in
+		// /static/app.js); QR images are same-origin, hence img-src 'self'.
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -268,6 +328,16 @@ func (s *Server) serveCSS(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (s *Server) serveJS(w http.ResponseWriter, r *http.Request) {
+	data, err := fs.ReadFile(staticFS, "static/app.js")
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Write(data)
+}
+
 // --- login ---
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -278,11 +348,47 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.render(w, "login.html", map[string]any{"Err": r.URL.Query().Get("err")})
 }
 
+// sweepSessions periodically reaps expired sessions so the in-memory map
+// can't grow unboundedly (they're also pruned lazily on access).
+func (s *Server) sweepSessions(interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		now := time.Now()
+		s.mu.Lock()
+		for k, v := range s.sessions {
+			if now.After(v.expires) {
+				delete(s.sessions, k)
+			}
+		}
+		s.mu.Unlock()
+		s.loginMu.Lock()
+		for k, v := range s.logins {
+			if now.After(v.lockedTill) {
+				if v.count < 5 {
+					delete(s.logins, k) // stale partial counter
+				} else {
+					v.count = 0 // lock expired: fresh slate, key retained
+					v.lockedTill = time.Time{}
+				}
+			}
+		}
+		s.loginMu.Unlock()
+	}
+}
+
 func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if s.loginBlocked(ip) {
+		http.Error(w, "too many failed attempts, try again later", http.StatusTooManyRequests)
+		return
+	}
 	if bcrypt.CompareHashAndPassword(s.d.Conf.PasswordHash, []byte(r.FormValue("password"))) != nil {
+		s.loginFailed(ip)
 		redirectErr(w, r, "/login", fmt.Errorf("wrong password"))
 		return
 	}
+	s.loginSucceeded(ip)
 	tok, err := randomToken()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
