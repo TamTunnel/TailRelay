@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"os"
@@ -29,9 +30,27 @@ func DefaultRunner(ctx context.Context, name string, args ...string) ([]byte, er
 	defer cancel()
 	out, err := exec.CommandContext(c, name, args...).CombinedOutput()
 	if err != nil {
-		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(redactArgs(args), " "), err, strings.TrimSpace(string(out)))
 	}
 	return out, nil
+}
+
+// redactArgs masks secret-bearing arguments (e.g. --authkey=<secret>) so
+// they never land in error strings, logs, or UI messages.
+func redactArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		if strings.Contains(strings.ToLower(a), "authkey") {
+			if eq := strings.Index(a, "="); eq >= 0 {
+				out[i] = a[:eq+1] + "<redacted>"
+			} else {
+				out[i] = "<redacted>"
+			}
+			continue
+		}
+		out[i] = a
+	}
+	return out
 }
 
 // --- keys ---
@@ -82,19 +101,37 @@ func ServerIP(poolCIDR string) (string, error) {
 	return ip.String(), nil
 }
 
-// NextClientIP returns the lowest free client address (.2 and up).
+// NextClientIP returns the lowest free client address. The server takes the
+// first usable host (.1); clients are allocated from .2 up to broadcast-1,
+// honoring the pool's mask (so a /25 only offers .2–.126, a /16 the full
+// range — not just the first /24).
 func NextClientIP(poolCIDR string, taken map[string]bool) (string, error) {
 	ip, ipnet, err := net.ParseCIDR(poolCIDR)
 	if err != nil {
 		return "", err
 	}
-	ip = ip.To4()
-	if ip == nil {
+	ip4 := ip.To4()
+	if ip4 == nil {
 		return "", fmt.Errorf("only IPv4 pools are supported, got %q", poolCIDR)
 	}
-	base := ip.Mask(ipnet.Mask)
-	for i := 2; i < 255; i++ {
-		cand := net.IPv4(base[0], base[1], base[2], byte(i)).String()
+	mask := net.IP(ipnet.Mask).To4()
+	if mask == nil {
+		return "", fmt.Errorf("only IPv4 pools are supported, got %q", poolCIDR)
+	}
+	network := ip4.Mask(ipnet.Mask).To4()
+	broadcast := net.IPv4(
+		network[0]|^mask[0], network[1]|^mask[1],
+		network[2]|^mask[2], network[3]|^mask[3],
+	).To4()
+	n := binary.BigEndian.Uint32(network)
+	b := binary.BigEndian.Uint32(broadcast)
+	if b < n+3 { // need network, server (.1), and at least one client address
+		return "", fmt.Errorf("pool %s too small for a server + clients", poolCIDR)
+	}
+	for h := n + 2; h < b; h++ { // .2 .. broadcast-1
+		var buf [4]byte
+		binary.BigEndian.PutUint32(buf[:], h)
+		cand := net.IP(buf[:]).String()
 		if !taken[cand] {
 			return cand, nil
 		}
@@ -204,12 +241,19 @@ func cidrHost(hostIP, poolCIDR string) string {
 
 // NetOps applies WireGuard state to the host via ip/wg/iptables.
 type NetOps struct {
-	Run   Runner
-	Iface string
+	Run     Runner
+	Iface   string // wireguard interface, e.g. wg0
+	TSIface string // tailscale interface NAT target, e.g. tailscale0
 }
 
 // Apply writes wg0.conf and brings the interface + NAT up. Idempotent.
 func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) error {
+	if n.TSIface == "" {
+		return fmt.Errorf("tailscale interface name is empty")
+	}
+	if _, err := n.Run(ctx, "ip", "link", "show", "dev", n.TSIface); err != nil {
+		return fmt.Errorf("tailscale interface %q not found (is tailscaled running?): %w", n.TSIface, err)
+	}
 	conf, err := RenderServerConfig(st, n.Iface)
 	if err != nil {
 		return err
@@ -221,7 +265,10 @@ func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) er
 		return err
 	}
 
-	serverIP, _ := ServerIP(st.Settings.PoolCIDR)
+	serverIP, err := ServerIP(st.Settings.PoolCIDR)
+	if err != nil {
+		return fmt.Errorf("pool CIDR: %w", err)
+	}
 	addr := cidrHost(serverIP, st.Settings.PoolCIDR)
 
 	// Create interface (ignore "exists").
@@ -256,18 +303,19 @@ func (n *NetOps) enableForwarding(ctx context.Context) error {
 	return nil
 }
 
-// ensureNAT installs the FORWARD + MASQUERADE rules wg0 -> tailscale0.
+// ensureNAT installs the FORWARD + MASQUERADE rules wg0 -> <ts-iface>.
 // Rules are checked with -C first so Apply stays idempotent.
 func (n *NetOps) ensureNAT(ctx context.Context, poolCIDR string) error {
+	tsif := n.TSIface
 	rules := [][]string{
-		{"-C", "FORWARD", "-i", n.Iface, "-o", "tailscale0", "-j", "ACCEPT"},
-		{"-C", "FORWARD", "-i", "tailscale0", "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-		{"-t", "nat", "-C", "POSTROUTING", "-s", poolCIDR, "-o", "tailscale0", "-j", "MASQUERADE"},
+		{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
+		{"-C", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+		{"-t", "nat", "-C", "POSTROUTING", "-s", poolCIDR, "-o", tsif, "-j", "MASQUERADE"},
 	}
 	adds := [][]string{
-		{"-A", "FORWARD", "-i", n.Iface, "-o", "tailscale0", "-j", "ACCEPT"},
-		{"-A", "FORWARD", "-i", "tailscale0", "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-		{"-t", "nat", "-A", "POSTROUTING", "-s", poolCIDR, "-o", "tailscale0", "-j", "MASQUERADE"},
+		{"-A", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
+		{"-A", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+		{"-t", "nat", "-A", "POSTROUTING", "-s", poolCIDR, "-o", tsif, "-j", "MASQUERADE"},
 	}
 	for i, check := range rules {
 		if _, err := n.Run(ctx, "iptables", check...); err != nil {
@@ -294,12 +342,13 @@ type PeerInfo struct {
 	TxBytes       uint64
 }
 
-// Dump returns live peer info keyed by public key. If the interface is
-// down it returns an empty map and no error.
+// Dump returns live peer info keyed by public key. A non-nil error means
+// the interface is down or `wg` failed — callers use it to mark the
+// interface down in the UI rather than reporting it as up.
 func (n *NetOps) Dump(ctx context.Context) (map[string]PeerInfo, error) {
 	out, err := n.Run(ctx, "wg", "show", n.Iface, "dump")
 	if err != nil {
-		return map[string]PeerInfo{}, nil // interface down: not fatal for the UI
+		return nil, fmt.Errorf("wg show %s: %w", n.Iface, err)
 	}
 	peers := map[string]PeerInfo{}
 	for _, line := range strings.Split(string(out), "\n") {
