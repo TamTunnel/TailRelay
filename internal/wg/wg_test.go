@@ -1,7 +1,11 @@
 package wg
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -428,5 +432,51 @@ AllowedIPs = 10.7.0.2/32, fd00::2/128
 		if strings.Contains(out, banned) {
 			t.Errorf("stripped config still contains %q:\n%s", banned, out)
 		}
+	}
+}
+
+func TestEnsureSysctl(t *testing.T) {
+	old := procSysBase
+	procSysBase = t.TempDir()
+	t.Cleanup(func() { procSysBase = old })
+
+	n := &NetOps{Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, errors.New("no sysctl in test")
+	}}
+	ctx := context.Background()
+
+	writeKey := func(key, val string) {
+		p := procSysBase + "/" + strings.ReplaceAll(key, ".", "/")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(val+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Already 1: no write attempted, no error even though sysctl fails.
+	writeKey("net.ipv4.ip_forward", "1")
+	if err := n.ensureSysctl(ctx, "net.ipv4.ip_forward"); err != nil {
+		t.Fatalf("already-enabled key should be a no-op: %v", err)
+	}
+
+	// Set to 0: sysctl fails, procfs fallback write succeeds.
+	writeKey("net.ipv6.conf.all.forwarding", "0")
+	if err := n.ensureSysctl(ctx, "net.ipv6.conf.all.forwarding"); err != nil {
+		t.Fatalf("fallback procfs write should succeed: %v", err)
+	}
+	b, _ := os.ReadFile(procSysBase + "/net/ipv6/conf/all/forwarding")
+	if strings.TrimSpace(string(b)) != "1" {
+		t.Fatalf("fallback write did not stick: %q", b)
+	}
+
+	// Missing key entirely: sysctl fails, fallback creates it.
+	missing := procSysBase + "/net/ipv4/conf/wg0"
+	if err := os.MkdirAll(missing, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.ensureSysctl(ctx, "net.ipv4.conf.wg0.forwarding"); err != nil {
+		t.Fatalf("missing key should be created via fallback: %v", err)
 	}
 }
