@@ -1,5 +1,5 @@
 # binaries
-tailrelay
+/tailrelay
 tailrelay-*
 
 # local test / runtime artifacts
