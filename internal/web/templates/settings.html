@@ -5,10 +5,7 @@
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <label>Client IP pool (CIDR)
 <input name="pool_cidr" value="{{.S.PoolCIDR}}" required></label>
-<p class="dim">Server takes .1. The pool can't be changed while clients exist — remove them first, then change it and re-add.</p>
-<label>Client IPv6 pool (CIDR — empty disables IPv6)
-<input name="ipv6_pool" value="{{.S.IPv6Pool}}" placeholder="fd12:3456:789a::/64"></label>
-<p class="dim">Server takes ::1, clients get ::2, ::3… A random ULA /64 is generated on first run (WG Easy-style). Like the IPv4 pool, it can't be changed while clients exist.</p>
+<p class="dim">Server takes .1. Changing the pool does not renumber existing clients.</p>
 <label>DNS for clients
 <input name="dns" value="{{.S.DNS}}" required></label>
 <label>MTU
@@ -22,11 +19,7 @@
 <p class="dim">Leave empty to auto-detect the VPS public IP at startup; override here any time.</p>
 <label>Client AllowedIPs
 <input name="client_allowed_ips" value="{{.S.ClientAllowedIPs}}" required></label>
-<p class="dim"><code>0.0.0.0/0, ::/0</code> routes all client traffic through this VPS and the chosen Tailscale exit node. If you empty the IPv6 pool above, remove <code>::/0</code> here too — with no v6 pool on the server it would blackhole client IPv6 traffic.</p>
-<label><input type="checkbox" name="kill_switch" value="1" {{if .S.KillSwitch}}checked{{end}}>
-Kill Switch (Pause when Tailscale is down)</label>
-<p class="dim">When on, a firewall rule drops any WireGuard traffic that isn't headed for the Tailscale interface — so a dead exit node or a crashed tailscaled fails closed (traffic stops) instead of leaking out the VPS's direct WAN. Default: on.</p>
-{{if not .S.KillSwitch}}<p class="banner warn">Warning: with the kill switch off, WireGuard client traffic could leak via the VPS's direct WAN (exposing your real IP) if tailscaled crashes. Leave it on unless you know what you're doing.</p>{{end}}
+<p class="dim"><code>0.0.0.0/0, ::/0</code> routes all client traffic through this VPS and the chosen Tailscale exit node.</p>
 <button type="submit">Save &amp; re-apply WireGuard</button>
 </form>
 </section>
