@@ -256,6 +256,7 @@ type clientView struct {
 	AddressV6 string
 	Created   string
 	PublicKey string
+	Config    string
 }
 
 type clientsData struct {
@@ -272,10 +273,16 @@ func (s *Server) handleClients(w http.ResponseWriter, r *http.Request) {
 	}
 	data := clientsData{pageData: s.baseData(w, r, "Clients"), Pool: st.Settings.PoolCIDR}
 	for _, c := range st.Clients {
+		conf, cerr := wg.RenderClientConfig(st, c)
+		if cerr != nil {
+			http.Error(w, cerr.Error(), http.StatusInternalServerError)
+			return
+		}
 		data.Clients = append(data.Clients, clientView{
 			Name: c.Name, Address: c.Address, AddressV6: c.AddressV6,
 			Created:   c.CreatedAt.Local().Format("2006-01-02"),
 			PublicKey: c.PublicKey,
+			Config:    conf,
 		})
 	}
 	sort.Slice(data.Clients, func(i, j int) bool { return data.Clients[i].Name < data.Clients[j].Name })
