@@ -1,0 +1,19 @@
+[Unit]
+Description=Tailrelay — WireGuard server bridged into Tailscale
+Documentation=https://github.com/TamTunnel/Tailrelay
+Wants=network-online.target tailscaled.service
+After=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/tailrelay
+# Optional env file for TR_ADMIN_PASSWORD etc. (0600, root-owned)
+EnvironmentFile=-/etc/tailrelay/env
+# State and config paths (override via env if needed)
+Environment=TR_STATE_PATH=/var/lib/tailrelay/state.json
+Environment=TR_CONF_PATH=/etc/wireguard/wg0.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

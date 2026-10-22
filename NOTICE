@@ -1,0 +1,18 @@
+Tailrelay
+Copyright 2026 TamTunnel
+
+This product includes software developed by TamTunnel, licensed under the
+Apache License, Version 2.0 (see LICENSE).
+
+Inspiration and prior art
+-------------------------
+Tailrelay was inspired by TailGuard (https://github.com/juhovh/tailguard),
+Copyright (c) Juho Vähä-Herttua, licensed under the MIT License. No TailGuard
+code was copied into Tailrelay; the implementation is original. We thank the
+TailGuard author for demonstrating the Tailscale↔WireGuard bridge concept.
+
+Third-party components
+----------------------
+- golang.org/x/crypto — BSD-3-Clause (https://go.dev/dl/#third-party)
+- github.com/skip2/go-qrcode — MIT License
+  Copyright (c) 2014, skip2

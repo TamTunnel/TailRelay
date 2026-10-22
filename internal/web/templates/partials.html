@@ -1,0 +1,27 @@
+{{define "header"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+<title>Tailrelay{{if .Title}} — {{.Title}}{{end}}</title>
+</head>
+<body>
+<nav>
+  <a class="brand" href="/">Tailrelay</a>
+  <a href="/">Dashboard</a>
+  <a href="/clients">Clients</a>
+  <a href="/settings">Settings</a>
+  <span class="spacer"></span>
+  {{if .Authed}}<form class="inline" method="post" action="/logout"><input type="hidden" name="csrf" value="{{.CSRF}}"><button class="link" type="submit">Log out</button></form>{{end}}
+</nav>
+<main>
+{{if .Msg}}<p class="flash ok">{{.Msg}}</p>{{end}}
+{{if .Err}}<p class="flash err">{{.Err}}</p>{{end}}
+{{end}}
+
+{{define "footer"}}</main>
+<footer>Tailrelay {{.Version}} · <a href="https://github.com/TamTunnel/Tailrelay">GitHub</a></footer>
+</body>
+</html>{{end}}
