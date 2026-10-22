@@ -38,11 +38,14 @@ pool <code>{{.WG.Pool}}</code> ·
 
 <section class="card">
 <h2>Tailscale bridge</h2>
+<p>Kill switch: <span class="pill {{.KillSwitchPill}}">{{.KillSwitchLabel}}</span>
+{{if .KillSwitchLeakNote}}<span class="dim">— WireGuard client traffic could leak via the VPS's direct WAN if tailscaled crashes. Re-enable it in <a href="/settings">Settings</a>.</span>{{end}}</p>
 {{if .TS.Running}}
 <p>Status: <span class="pill ok">connected</span>
 {{.TS.Hostname}} ·
 {{range .TS.IPs}}<code>{{.}}</code> {{end}}
-{{if .TS.UsingExitNode}}· relaying via <strong>exit node</strong>{{end}}</p>
+{{if .TS.UsingExitNode}}· relaying via exit node <strong>{{.TS.ExitNodeName}}</strong> <span class="pill ok">online</span>{{end}}</p>
+{{if .ExitNodeWarning}}<p class="banner warn">{{.ExitNodeWarning}}</p>{{end}}
 
 <h3>Exit node for WireGuard traffic</h3>
 <form method="post" action="/ts/exit-node">
