@@ -53,4 +53,13 @@ else
     echo "entrypoint: warning: tailscaled socket not available; starting web UI anyway"
 fi
 
+# Wait for Tailscale to have an IPv4 (bounded) so the Go binary binds to the
+# tailnet IP, not 127.0.0.1. The socket existing doesn't mean we're logged in.
+for i in $(seq 1 30); do
+    if [ -n "$(tailscale ip -4 2>/dev/null)" ]; then
+        break
+    fi
+    sleep 1
+done
+
 exec /usr/local/bin/tailrelay "$@"
