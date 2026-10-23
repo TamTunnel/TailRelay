@@ -44,7 +44,8 @@ pool <code>{{.WG.Pool}}</code> ·
 <p>Status: <span class="pill ok">connected</span>
 {{.TS.Hostname}} ·
 {{range .TS.IPs}}<code>{{.}}</code> {{end}}
-{{if .TS.UsingExitNode}}· relaying via exit node <strong>{{.TS.ExitNodeName}}</strong> <span class="pill ok">online</span>{{end}}</p>
+{{if .TS.UsingExitNode}}· relaying via exit node <strong>{{.TS.ExitNodeName}}</strong> <span class="pill ok">online</span>{{end}}
+{{if .TSVersion}}<span class="dim">· tailscale {{.TSVersion}}</span>{{end}}</p>
 {{if .ExitNodeWarning}}<p class="banner warn">{{.ExitNodeWarning}}</p>{{end}}
 
 <h3>Exit node for WireGuard traffic</h3>
@@ -73,7 +74,7 @@ pool <code>{{.WG.Pool}}</code> ·
 <span class="dim">comma-separated; empty clears</span>
 </form>
 {{else}}
-<p>Status: <span class="pill err">{{.TS.BackendState}}</span> — tailscaled is not logged in.</p>
+<p>Status: <span class="pill err">{{.TS.BackendState}}</span> — tailscaled is not logged in.{{if .TSVersion}}<span class="dim"> (tailscale {{.TSVersion}})</span>{{end}}</p>
 <form method="post" action="/ts/up">
 <input type="hidden" name="csrf" value="{{.CSRF}}">
 <input name="authkey" size="40" placeholder="tskey-auth-..." autocomplete="off">
