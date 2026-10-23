@@ -310,8 +310,10 @@ func TestEnsureNATExitNodeModeNoWANRules(t *testing.T) {
 		t.Fatalf("ensureNAT: %v", err)
 	}
 	joined := strings.Join(f.calls, "\n")
-	if strings.Contains(joined, "-o ens3") {
-		t.Errorf("exit-node mode must not add WAN rules:\n%s", joined)
+	// Must not add FORWARD rules for WAN (client traffic stays on tailnet),
+	// but the mangle/MASQUERADE bypass for the WG server port is expected.
+	if strings.Contains(joined, "-i wg0 -o ens3") {
+		t.Errorf("exit-node mode must not add WAN FORWARD rules:\n%s", joined)
 	}
 	if !strings.Contains(joined, "-i wg0 ! -o tailscale0 -j DROP") {
 		t.Errorf("exit-node mode with kill switch should keep DROP:\n%s", joined)
@@ -346,6 +348,11 @@ func TestEnsureNATExitNodeAddsMangleBypass(t *testing.T) {
 	want := "iptables -t mangle -A OUTPUT -p udp --sport 51820 -j MARK --set-mark 0x80000"
 	if !strings.Contains(joined, want) {
 		t.Errorf("exit-node mode must add mangle bypass for WG port, want %q in:\n%s", want, joined)
+	}
+	// MASQUERADE ensures the source IP is the WAN IP, not the Tailscale IP.
+	wantMasq := "iptables -t nat -A POSTROUTING -p udp --sport 51820 -o ens3 -j MASQUERADE"
+	if !strings.Contains(joined, wantMasq) {
+		t.Errorf("exit-node mode must MASQUERADE WG port on WAN, want %q in:\n%s", wantMasq, joined)
 	}
 }
 
