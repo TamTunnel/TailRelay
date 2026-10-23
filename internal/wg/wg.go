@@ -393,6 +393,14 @@ func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) er
 	if _, err := n.Run(ctx, "wg", "setconf", n.Iface, setconfPath); err != nil {
 		return fmt.Errorf("wg setconf: %w", err)
 	}
+	// Set fwmark on the WireGuard interface using the listen port.
+	// The kernel marks all traffic from the WireGuard socket, allowing
+	// policy routing to exclude it from Tailscale's exit-node table.
+	// (Same approach as tailguard.)
+	fwmark := strconv.Itoa(st.Settings.ListenPort)
+	if _, err := n.Run(ctx, "wg", "set", n.Iface, "fwmark", fwmark); err != nil {
+		return fmt.Errorf("setting fwmark: %w", err)
+	}
 	if _, err := n.Run(ctx, "ip", "link", "set", "up", "dev", n.Iface); err != nil {
 		return fmt.Errorf("bringing interface up: %w", err)
 	}
@@ -533,24 +541,28 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 			[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE"},
 			[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE"})
 	}
-	// When using a Tailscale exit node, the WireGuard server's own UDP
-	// responses must bypass the exit node and go direct via WAN.
-	// Otherwise the handshake response gets routed through the exit node
-	// and the client never sees it (wrong source path).
-	// Tailscale uses fwmark 0x80000/0xff0000 to bypass (ip rule 5210).
-	// Additionally, the source IP must be the WAN IP (not the Tailscale IP),
-	// so MASQUERADE the WireGuard port on the WAN interface.
+	// When using a Tailscale exit node, the WireGuard server's own traffic
+	// (handshakes, keepalives) must bypass the exit node and go direct via WAN.
+	// Approach (from tailguard): the WireGuard interface has a fwmark set
+	// (see above), and we add an ip rule that excludes marked packets from
+	// Tailscale's exit-node table 52. The rule uses the same priority (5270)
+	// as Tailscale's own rule, with a 'not fwmark' selector so it takes
+	// precedence for non-WireGuard traffic.
 	if s.ExitNode != "" {
-		wan, err := n.detectWAN(ctx)
-		if err != nil {
-			return fmt.Errorf("detecting WAN interface for exit-node bypass: %w", err)
+		fwmark := strconv.Itoa(s.ListenPort)
+		for _, fam := range []string{"-4", "-6"} {
+			// Delete any existing rule first (idempotent), then add.
+			n.Run(ctx, "ip", fam, "rule", "del", "not", "from", "all", "fwmark", fwmark, "lookup", "52", "pref", "5270")
+			if _, err := n.Run(ctx, "ip", fam, "rule", "add", "not", "from", "all", "fwmark", fwmark, "lookup", "52", "pref", "5270"); err != nil {
+				return fmt.Errorf("adding fwmark bypass rule: %w", err)
+			}
 		}
-		addPair("iptables",
-			[]string{"-t", "mangle", "-C", "OUTPUT", "-p", "udp", "--sport", port, "-j", "MARK", "--set-mark", "0x80000"},
-			[]string{"-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--sport", port, "-j", "MARK", "--set-mark", "0x80000"})
-		addPair("iptables",
-			[]string{"-t", "nat", "-C", "POSTROUTING", "-p", "udp", "--sport", port, "-o", wan, "-j", "MASQUERADE"},
-			[]string{"-t", "nat", "-A", "POSTROUTING", "-p", "udp", "--sport", port, "-o", wan, "-j", "MASQUERADE"})
+	} else {
+		// No exit node: remove the bypass rules if they exist.
+		fwmark := strconv.Itoa(s.ListenPort)
+		for _, fam := range []string{"-4", "-6"} {
+			n.Run(ctx, "ip", fam, "rule", "del", "not", "from", "all", "fwmark", fwmark, "lookup", "52", "pref", "5270")
+		}
 	}
 	for _, p := range pairs {
 		if _, err := n.Run(ctx, p.bin, p.check...); err != nil {

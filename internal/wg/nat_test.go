@@ -18,7 +18,15 @@ type natFake struct {
 
 func (f *natFake) run(ctx context.Context, name string, args ...string) ([]byte, error) {
 	if name == "ip" {
-		return []byte("default via 10.0.0.1 dev ens3 proto dhcp metric 100\n"), nil
+		// Record ip rule commands for testing.
+		if len(args) > 1 && args[1] == "rule" {
+			f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+		}
+		// Simulate detectWAN for "ip route show".
+		if len(args) >= 2 && args[0] == "route" {
+			return []byte("default via 10.0.0.1 dev ens3 proto dhcp metric 100\n"), nil
+		}
+		return []byte{}, nil
 	}
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
 	isCheck := false
@@ -335,7 +343,7 @@ func TestEnsureNATAddsInputRuleForWGPort(t *testing.T) {
 	}
 }
 
-func TestEnsureNATExitNodeAddsMangleBypass(t *testing.T) {
+func TestEnsureNATExitNodeAddsFwmarkBypass(t *testing.T) {
 	f := &natFake{checkFails: true}
 	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
 	s := v4Settings(true)
@@ -345,18 +353,23 @@ func TestEnsureNATExitNodeAddsMangleBypass(t *testing.T) {
 		t.Fatalf("ensureNAT: %v", err)
 	}
 	joined := strings.Join(f.calls, "\n")
-	want := "iptables -t mangle -A OUTPUT -p udp --sport 51820 -j MARK --set-mark 0x80000"
+	// TailGuard approach: ip rule to exclude WireGuard fwmark from Tailscale's
+	// exit-node table 52.
+	want := "ip -4 rule add not from all fwmark 51820 lookup 52 pref 5270"
 	if !strings.Contains(joined, want) {
-		t.Errorf("exit-node mode must add mangle bypass for WG port, want %q in:\n%s", want, joined)
+		t.Errorf("exit-node mode must add fwmark bypass rule, want %q in:\n%s", want, joined)
 	}
-	// MASQUERADE ensures the source IP is the WAN IP, not the Tailscale IP.
-	wantMasq := "iptables -t nat -A POSTROUTING -p udp --sport 51820 -o ens3 -j MASQUERADE"
-	if !strings.Contains(joined, wantMasq) {
-		t.Errorf("exit-node mode must MASQUERADE WG port on WAN, want %q in:\n%s", wantMasq, joined)
+	want6 := "ip -6 rule add not from all fwmark 51820 lookup 52 pref 5270"
+	if !strings.Contains(joined, want6) {
+		t.Errorf("exit-node mode must add IPv6 fwmark bypass rule, want %q in:\n%s", want6, joined)
+	}
+	// Old mangle/MASQUERADE approach must be gone.
+	if strings.Contains(joined, "mangle -A OUTPUT") {
+		t.Errorf("must not use mangle OUTPUT MARK (use fwmark+ip rule instead):\n%s", joined)
 	}
 }
 
-func TestEnsureNATDirectModeNoMangleBypass(t *testing.T) {
+func TestEnsureNATDirectModeNoFwmarkBypass(t *testing.T) {
 	f := &natFake{checkFails: true}
 	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
 	s := v4Settings(true)
@@ -365,7 +378,7 @@ func TestEnsureNATDirectModeNoMangleBypass(t *testing.T) {
 		t.Fatalf("ensureNAT: %v", err)
 	}
 	joined := strings.Join(f.calls, "\n")
-	if strings.Contains(joined, "mangle") {
-		t.Errorf("direct mode must not add mangle bypass:\n%s", joined)
+	if strings.Contains(joined, "rule add not from all fwmark") {
+		t.Errorf("direct mode must not add fwmark bypass rule:\n%s", joined)
 	}
 }
