@@ -2,27 +2,16 @@
 # TailRelay container entrypoint: run our own tailscaled in this network
 # namespace (tailguard-style isolation), then exec the Go binary.
 #
-# Uses the official tailscale/tailscale:stable base image (Alpine) which
-# ships a full Tailscale build. TS_USERSPACE=false requests kernel (TUN)
-# mode instead of userspace netstack; kernel mode is required for iptables
-# forwarding + NAT of WireGuard client traffic (userspace doesn't handle
-# forwarded packets). If /dev/net/tun is unavailable (e.g. CI smoke test),
-# tailscaled fails gracefully and the UI still comes up.
-#
 # Env:
-#   TS_AUTHKEY    one-time Tailscale auth key. If set and not already logged
-#                 in, we run `tailscale up` automatically. Persists in
-#                 /var/lib/tailscale (volume).
-#   TS_HOSTNAME   tailnet hostname (default: tailrelay)
-#   TS_EXTRA_ARGS extra args for `tailscale up` (e.g. "--ssh")
-#   TS_USERSPACE  "false" (default) for kernel mode; "true" forces userspace.
+#   TS_AUTHKEY    one-time Tailscale login (auth key). If set and this node
+#                 isn't already up, we run `tailscale up` automatically.
+#                 Identity persists in /var/lib/tailscale (volume).
+#   TS_HOSTNAME   tailnet hostname for `tailscale up` (default: tailrelay)
+#   TS_EXTRA_ARGS extra args appended to `tailscale up` (e.g. "--ssh")
 set -e
 
 SOCK=/var/run/tailscale/tailscaled.sock
 mkdir -p /var/lib/tailscale /var/run/tailscale
-
-# Request kernel mode. Honored by tailscaled when /dev/net/tun is available.
-export TS_USERSPACE="${TS_USERSPACE:-false}"
 
 # Start tailscaled in the background. If it can't start (e.g. no
 # /dev/net/tun in a smoke-test container), the Go binary still comes up
@@ -61,14 +50,5 @@ if [ -S "$SOCK" ]; then
 else
     echo "entrypoint: warning: tailscaled socket not available; starting web UI anyway"
 fi
-
-# Wait for Tailscale to have an IPv4 (bounded) so the Go binary binds to the
-# tailnet IP, not 127.0.0.1. The socket existing doesn't mean we're logged in.
-for i in $(seq 1 30); do
-    if [ -n "$(tailscale ip -4 2>/dev/null)" ]; then
-        break
-    fi
-    sleep 1
-done
 
 exec /usr/local/bin/tailrelay "$@"

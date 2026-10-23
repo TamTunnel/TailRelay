@@ -133,8 +133,11 @@ type dashboardData struct {
 		Pool       string
 		ServerPub  string
 	}
-	Peers     []peerView
-	TS        ts.Status
+	Peers []peerView
+	TS    ts.Status
+	// TSVersion is the bundled tailscaled version (`tailscale version`),
+	// "" when unreachable. Makes a stale Tailscale visible in the UI.
+	TSVersion string
 	Routes    string
 	ExitNodes []ts.ExitNode
 	// ExitNodeWarning is set when a pinned exit node is down or not
@@ -214,6 +217,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	} else {
 		data.TS.BackendState = "unreachable"
 	}
+	// Tailscale version is independent of login state; `tailscale version`
+	// works even when tailscaled needs login (or is down -> "").
+	data.TSVersion = ts.Version(ctx, s.d.TS)
 	// Kill-switch status: on+healthy = tunneling; on+down = paused
 	// (traffic dropped, not leaked); off = leak risk, said plainly.
 	switch {
