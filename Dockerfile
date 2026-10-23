@@ -19,10 +19,10 @@ RUN CGO_ENABLED=0 go build -trimpath \
 # WireGuard (tailguard-style isolation): the host's Tailscale — if any — is
 # never touched, and host routing is unaffected.
 FROM tailscale/tailscale:stable
-# Install WireGuard tools and iptables (Debian-based image).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    iproute2 iptables wireguard-tools \
- && rm -rf /var/lib/apt/lists/* \
+# Alpine-based (see https://github.com/tailscale/tailscale/blob/main/Dockerfile).
+# Already ships iptables, iproute2, ca-certificates. Add wireguard-tools for
+# the `wg` CLI used by TailRelay's NetOps.
+RUN apk add --no-cache wireguard-tools \
  && mkdir -p /var/lib/tailrelay /var/lib/tailscale /var/run/tailscale /etc/wireguard
 COPY --from=build /tailrelay /usr/local/bin/tailrelay
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
