@@ -37,8 +37,10 @@ if [ -S "$SOCK" ]; then
             echo "entrypoint: tailscale up --hostname=${TS_HOSTNAME:-tailrelay}"
             # Non-fatal: a bad key must not crash-loop the container; the
             # web UI's Tailscale section offers manual login as fallback.
+            # TS_AUTHKEY is already in the environment; the tailscale CLI
+            # honors it natively (avoids exposing the key in /proc/cmdline).
             # shellcheck disable=SC2086
-            if ! tailscale up --authkey="$TS_AUTHKEY" \
+            if ! tailscale up \
                 --hostname="${TS_HOSTNAME:-tailrelay}" \
                 ${TS_EXTRA_ARGS}; then
                 echo "entrypoint: warning: tailscale up failed; use the web UI to log in"

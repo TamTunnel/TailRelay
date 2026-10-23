@@ -92,11 +92,11 @@ docker compose up -d
 
 | Variable | Default | Description |
 |---|---|---|
-| `TS_AUTHKEY` | *(none)* | Tailscale auth key for the container's own node; omit to log in via web UI |
+| `TS_AUTHKEY` | *(none)* | Tailscale auth key for the container's own node; use a **one-time (non-reusable)** key from https://login.tailscale.com/admin/settings/keys. Omit to log in via web UI (requires `TR_BIND_ADDR=0.0.0.0` + `TR_ADMIN_PASSWORD` so the UI is reachable before Tailscale is up) |
 | `TS_HOSTNAME` | `tailrelay` | Tailnet hostname for the container's node |
 | `TR_PORT` | `8080` | Web UI port |
 | `TR_BIND_ADDR` | `tailscale ip -4` (else `127.0.0.1`) | Web UI bind address |
-| `TR_ADMIN_PASSWORD` | *(none)* | **Required** if binding beyond localhost/tailnet |
+| `TR_ADMIN_PASSWORD` | *(none)* | **Required** if binding beyond localhost/tailnet. **Anyone on your tailnet can administer TailRelay** (add WireGuard peers, change exit nodes, re-register the node) — set a password unless you fully trust every tailnet device |
 | `TR_ENDPOINT` | *(none)* | Public `IP:port` clients connect to (e.g. `203.0.113.1:51820`) |
 
 **Updating:**
@@ -116,12 +116,9 @@ shows the running Tailscale version — `docker pull` is the whole update path.
 - Bridge networking + `NET_ADMIN`: the container owns its network namespace,
   so exit-node routing stays inside the container and can't fight the host.
 - The old host-socket setup (mounting `/var/run/tailscale`) is gone; if
-  you're migrating, remove the old container and its volumes are *not*
-  reused — the container registers as a new tailnet node on first `TS_AUTHKEY`
-  login.
-- If `/usr/bin/tailscale` doesn't exist on your host, adjust the CLI mount path to wherever your `tailscale` binary lives (`which tailscale`).
-
-See [Docker vs binary](#docker-vs-binary) below for the tradeoff. The compose file uses host networking and mounts the host's Tailscale socket plus the `tailscale` CLI.
+  you're migrating, remove the old container — the new container registers
+  as its own tailnet node on first `TS_AUTHKEY` login (the `tailscale-state`
+  volume preserves its identity across recreates).
 
 ## Configuration
 
@@ -229,15 +226,15 @@ We ship both, but they aren't equal:
 | | Binary + systemd | Docker |
 |---|---|---|
 | Overhead | none | container runtime, image pull |
-| Needs | root once at install | `NET_ADMIN`, host networking, `/dev/net/tun`, Tailscale socket + CLI mounts |
-| Tailscale access | native (host `tailscaled`) | via mounted `/var/run/tailscale/` dir |
+| Needs | root once at install | `NET_ADMIN`, `/dev/net/tun`, published ports |
+| Tailscale access | native (host `tailscaled`) | bundled in image (own `tailscaled`) |
 | Best for | a VPS you control | fleets / immutable infra |
 
-Honest take: on a single VPS, the binary is simpler and lighter — Docker buys you nothing except packaging familiarity, while adding socket-mount fragility. Use Docker if your workflow is already container-based; otherwise take the binary.
+Honest take: on a single VPS, the binary is simpler and lighter — Docker buys you packaging consistency and a self-contained Tailscale (no host dependency), at the cost of a heavier image. Use Docker if your workflow is already container-based or you need exit-node relay (the supported path for that); otherwise take the binary.
 
 ## Tailscale prerequisite
 
-Tailrelay assumes `tailscaled` is **already installed and (usually) logged in** on the VPS:
+**Binary install:** Tailrelay assumes `tailscaled` is **already installed and (usually) logged in** on the VPS:
 
 ```sh
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -247,6 +244,8 @@ sudo tailscale up
 If it's installed but not logged in, the dashboard offers a `tailscale up` form — paste an auth key (from https://login.tailscale.com/admin/settings/keys), and Tailrelay runs `tailscale up --authkey=...` once. The key is never stored.
 
 Why not install Tailscale automatically? Installing a privileged network daemon is distro-specific (apt/dnf/pacman/apk…) and a security-sensitive step that should be a conscious admin decision, not a side effect of starting a web UI. Out of scope by design.
+
+**Docker install:** none of the above applies — the image bundles its own `tailscaled` (latest stable at build time, rebuilt weekly by CI). Pass `TS_AUTHKEY` on first run or use the dashboard's login form.
 
 ## Privacy
 
