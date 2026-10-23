@@ -538,10 +538,19 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	// Otherwise the handshake response gets routed through the exit node
 	// and the client never sees it (wrong source path).
 	// Tailscale uses fwmark 0x80000/0xff0000 to bypass (ip rule 5210).
+	// Additionally, the source IP must be the WAN IP (not the Tailscale IP),
+	// so MASQUERADE the WireGuard port on the WAN interface.
 	if s.ExitNode != "" {
+		wan, err := n.detectWAN(ctx)
+		if err != nil {
+			return fmt.Errorf("detecting WAN interface for exit-node bypass: %w", err)
+		}
 		addPair("iptables",
 			[]string{"-t", "mangle", "-C", "OUTPUT", "-p", "udp", "--sport", port, "-j", "MARK", "--set-mark", "0x80000"},
 			[]string{"-t", "mangle", "-A", "OUTPUT", "-p", "udp", "--sport", port, "-j", "MARK", "--set-mark", "0x80000"})
+		addPair("iptables",
+			[]string{"-t", "nat", "-C", "POSTROUTING", "-p", "udp", "--sport", port, "-o", wan, "-j", "MASQUERADE"},
+			[]string{"-t", "nat", "-A", "POSTROUTING", "-p", "udp", "--sport", port, "-o", wan, "-j", "MASQUERADE"})
 	}
 	for _, p := range pairs {
 		if _, err := n.Run(ctx, p.bin, p.check...); err != nil {
