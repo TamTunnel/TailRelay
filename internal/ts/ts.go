@@ -9,7 +9,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -241,13 +243,30 @@ func SetAdvertiseRoutes(ctx context.Context, run Runner, routes string) error {
 	return err
 }
 
-// Up brings tailscaled up with an auth key. The key is passed only to the
-// tailscale CLI and is never persisted by Tailrelay.
+// upMu serializes tailscale up calls so the TS_AUTHKEY env var dance below
+// doesn't race.
+var upMu sync.Mutex
+
+// Up brings tailscaled up with an auth key. The key is passed via the
+// TS_AUTHKEY environment variable (which the tailscale CLI honors natively)
+// instead of a --authkey flag, so it never appears in /proc/<pid>/cmdline.
+// The key is never persisted by Tailrelay.
 func Up(ctx context.Context, run Runner, authKey, hostname string) error {
-	args := []string{"up", "--authkey=" + authKey}
+	args := []string{"up"}
 	if hostname != "" {
 		args = append(args, "--hostname="+hostname)
 	}
+	upMu.Lock()
+	defer upMu.Unlock()
+	old, hadOld := os.LookupEnv("TS_AUTHKEY")
+	os.Setenv("TS_AUTHKEY", authKey)
+	defer func() {
+		if hadOld {
+			os.Setenv("TS_AUTHKEY", old)
+		} else {
+			os.Unsetenv("TS_AUTHKEY")
+		}
+	}()
 	c, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	_, err := run(c, "tailscale", args...)
