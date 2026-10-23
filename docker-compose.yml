@@ -24,7 +24,9 @@ services:
       net.ipv6.conf.all.forwarding: 1
     ports:
       - "51820:51820/udp" # WireGuard — open this in your cloud firewall/NSG
-      - "41641:41641/udp" # Tailscale direct connections (optional; DERP relay works without it)
+      # NOTE: do NOT publish 41641/udp if the host already runs Tailscale
+      # (port clash). The container's tailscaled works fine via DERP relays
+      # without it; direct connections are a latency optimization only.
       - "8080:8080"       # web UI (also reachable via the container's tailnet IP)
     volumes:
       # persisted state (private keys!). wg0.conf is regenerated from state
