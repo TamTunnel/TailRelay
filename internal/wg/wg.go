@@ -543,11 +543,9 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	}
 	// When using a Tailscale exit node, the WireGuard server's own traffic
 	// (handshakes, keepalives) must bypass the exit node and go direct via WAN.
-	// Approach (from tailguard): the WireGuard interface has a fwmark set
-	// (see above), and we add an ip rule that excludes marked packets from
-	// Tailscale's exit-node table 52. The rule uses the same priority (5270)
-	// as Tailscale's own rule, with a 'not fwmark' selector so it takes
-	// precedence for non-WireGuard traffic.
+	// The WireGuard interface carries a fwmark (its listen port, set in Apply);
+	// this rule sends marked packets to the main table at pref 5269, ahead of
+	// Tailscale's own "5270: from all lookup 52" exit-node rule.
 	if s.ExitNode != "" {
 		fwmark := strconv.Itoa(s.ListenPort)
 		for _, fam := range []string{"-4", "-6"} {

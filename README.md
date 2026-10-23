@@ -53,41 +53,47 @@ sudo systemctl enable --now tailrelay
 
 ### Docker
 
-**Prerequisites on the host:**
-- [Tailscale](https://tailscale.com/download) installed **and logged in** (`sudo tailscale up`) — the container reuses your host's Tailscale daemon, it does not run its own.
+The container is a self-contained bridge appliance: it runs its **own**
+`tailscaled` in the same network namespace as WireGuard (tailguard-style
+isolation). The host does **not** need Tailscale installed, and the host's
+network stack — including any host Tailscale — is never touched.
+
+**Prerequisites:**
 - Docker installed.
-- UDP port `51820` (or your chosen WireGuard port) reachable from the internet — open it in your cloud firewall / security group.
+- A Tailscale auth key ([generate one](https://login.tailscale.com/admin/settings/keys)) — one time; the container's node identity persists in a volume. (Or skip it and log in from the web UI's Tailscale section.)
+- UDP port `51820` (or your chosen WireGuard port) reachable from the internet — open it in your cloud firewall / security group (e.g. Oracle NSG).
 
 **Quick start** (prebuilt image from GHCR):
 
 ```sh
-# pull the latest image
 docker pull ghcr.io/tamtunnel/tailrelay:latest
 
-# run it (replace the endpoint IP if api.ipify.org is blocked)
 docker run -d --name tailrelay --restart unless-stopped \
-  --network host --cap-add NET_ADMIN \
-  -v /var/run/tailscale:/var/run/tailscale \
-  -v /usr/bin/tailscale:/usr/local/bin/tailscale:ro \
+  --cap-add NET_ADMIN --device /dev/net/tun \
+  -p 51820:51820/udp -p 8080:8080 \
   -v tailrelay-state:/var/lib/tailrelay \
+  -v tailscale-state:/var/lib/tailscale \
+  -e TS_AUTHKEY=tskey-auth-... \
   -e TR_ENDPOINT=$(curl -s api.ipify.org):51820 \
   ghcr.io/tamtunnel/tailrelay:latest
 ```
 
-Then open the web UI at `http://<your-tailscale-ip>:8080` (find it with `tailscale ip -4`).
+Then open the web UI at `http://<container-tailscale-ip>:8080` (shown in the
+container log on startup, or `docker exec tailrelay tailscale ip -4`).
 
 **With docker compose:**
 
 ```sh
+# set TS_AUTHKEY in docker-compose.yml (or leave it out and use the web UI)
 docker compose up -d
 ```
 
-The compose file in this repo uses the prebuilt image. To build locally instead, uncomment the `build:` section.
-
-**Configuration** — environment variables (same as the binary):
+**Configuration** — environment variables:
 
 | Variable | Default | Description |
 |---|---|---|
+| `TS_AUTHKEY` | *(none)* | Tailscale auth key for the container's own node; omit to log in via web UI |
+| `TS_HOSTNAME` | `tailrelay` | Tailnet hostname for the container's node |
 | `TR_PORT` | `8080` | Web UI port |
 | `TR_BIND_ADDR` | `tailscale ip -4` (else `127.0.0.1`) | Web UI bind address |
 | `TR_ADMIN_PASSWORD` | *(none)* | **Required** if binding beyond localhost/tailnet |
@@ -101,11 +107,18 @@ docker stop tailrelay && docker rm tailrelay
 # re-run the same docker run command above
 ```
 
-Your keys and settings persist in the `tailrelay-state` volume.
+Keys, settings, and the Tailscale node identity persist in the
+`tailrelay-state` and `tailscale-state` volumes. The image bundles the latest
+stable Tailscale at build time (rebuilt weekly by CI), and the dashboard
+shows the running Tailscale version — `docker pull` is the whole update path.
 
 **Notes:**
-- The container uses `--network host` and `NET_ADMIN` because it creates the `wg0` interface and iptables rules on the host network stack. There is no meaningful network isolation here by design.
-- Mount `/var/run/tailscale` (the directory, not the `.sock` file) so a `tailscaled` restart doesn't leave a stale socket mount.
+- Bridge networking + `NET_ADMIN`: the container owns its network namespace,
+  so exit-node routing stays inside the container and can't fight the host.
+- The old host-socket setup (mounting `/var/run/tailscale`) is gone; if
+  you're migrating, remove the old container and its volumes are *not*
+  reused — the container registers as a new tailnet node on first `TS_AUTHKEY`
+  login.
 - If `/usr/bin/tailscale` doesn't exist on your host, adjust the CLI mount path to wherever your `tailscale` binary lives (`which tailscale`).
 
 See [Docker vs binary](#docker-vs-binary) below for the tradeoff. The compose file uses host networking and mounts the host's Tailscale socket plus the `tailscale` CLI.
