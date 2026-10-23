@@ -353,13 +353,13 @@ func TestEnsureNATExitNodeAddsFwmarkBypass(t *testing.T) {
 		t.Fatalf("ensureNAT: %v", err)
 	}
 	joined := strings.Join(f.calls, "\n")
-	// TailGuard approach: ip rule to exclude WireGuard fwmark from Tailscale's
-	// exit-node table 52.
-	want := "ip -4 rule add not from all fwmark 51820 lookup 52 pref 5270"
+	// TailGuard approach: ip rule to send WireGuard fwmark traffic to main
+	// table, bypassing Tailscale's exit-node table 52 (pref 5270).
+	want := "ip -4 rule add fwmark 51820 lookup main pref 5269"
 	if !strings.Contains(joined, want) {
 		t.Errorf("exit-node mode must add fwmark bypass rule, want %q in:\n%s", want, joined)
 	}
-	want6 := "ip -6 rule add not from all fwmark 51820 lookup 52 pref 5270"
+	want6 := "ip -6 rule add fwmark 51820 lookup main pref 5269"
 	if !strings.Contains(joined, want6) {
 		t.Errorf("exit-node mode must add IPv6 fwmark bypass rule, want %q in:\n%s", want6, joined)
 	}
@@ -378,7 +378,7 @@ func TestEnsureNATDirectModeNoFwmarkBypass(t *testing.T) {
 		t.Fatalf("ensureNAT: %v", err)
 	}
 	joined := strings.Join(f.calls, "\n")
-	if strings.Contains(joined, "rule add not from all fwmark") {
+	if strings.Contains(joined, "rule add fwmark") {
 		t.Errorf("direct mode must not add fwmark bypass rule:\n%s", joined)
 	}
 }
