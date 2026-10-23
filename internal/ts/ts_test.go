@@ -119,6 +119,25 @@ func TestGetStatusError(t *testing.T) {
 	}
 }
 
+func TestVersion(t *testing.T) {
+	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "tailscale" || len(args) != 1 || args[0] != "version" {
+			t.Fatalf("unexpected command: %s %v", name, args)
+		}
+		return []byte("1.104.2\n  tailscale commit: abc123\n  go version: go1.24.0\n"), nil
+	}
+	if got := Version(context.Background(), run); got != "1.104.2" {
+		t.Errorf("Version() = %q, want %q", got, "1.104.2")
+	}
+	// Unreachable CLI -> "".
+	broken := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, errors.New("no such file")
+	}
+	if got := Version(context.Background(), broken); got != "" {
+		t.Errorf("Version() on error = %q, want %q", got, "")
+	}
+}
+
 func TestParseStatusExitNodeName(t *testing.T) {
 	st, err := ParseStatus([]byte(`{"BackendState":"Running",
 		"ExitNodeStatus":{"ID":"node123","Online":true,"Hostinfo":{"HostName":"exit-1"}}}`))

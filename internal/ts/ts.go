@@ -1,6 +1,8 @@
-// Package ts wraps the host `tailscale` CLI: status, exit-node selection,
-// advertised routes, and `tailscale up`. tailscaled itself is a prerequisite;
-// Tailrelay never installs it.
+// Package ts wraps the `tailscale` CLI: status, exit-node selection,
+// advertised routes, and `tailscale up`. In Docker the container runs its
+// own tailscaled (same network namespace as WireGuard); the static binary
+// install uses the host's. Either way the CLI talks to the default socket,
+// so no path configuration is needed.
 package ts
 
 import (
@@ -91,6 +93,22 @@ func IP4(ctx context.Context, run Runner) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// Version returns the tailscaled version (`tailscale version`), e.g.
+// "1.86.5". "" when the CLI is unreachable. Shown in the UI so a stale
+// bundled Tailscale is visible.
+func Version(ctx context.Context, run Runner) string {
+	out, err := run(ctx, "tailscale", "version")
+	if err != nil {
+		return ""
+	}
+	// First line is the bare version: "1.86.5\n  tailscale commit: ..."
+	f := strings.Fields(string(out))
+	if len(f) == 0 {
+		return ""
+	}
+	return f[0]
 }
 
 // ParseExitNodeList parses `tailscale exit-node list` text output. Two
