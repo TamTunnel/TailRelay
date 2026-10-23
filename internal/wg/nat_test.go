@@ -382,3 +382,24 @@ func TestEnsureNATDirectModeNoFwmarkBypass(t *testing.T) {
 		t.Errorf("direct mode must not add fwmark bypass rule:\n%s", joined)
 	}
 }
+
+// The old mangle/MASQUERADE workaround for the WireGuard socket must never
+// come back: socket bypass is done via interface fwmark + ip rule only.
+func TestEnsureNATEmitsNoMangleSocketRules(t *testing.T) {
+	for _, exitNode := range []string{"", "home-router"} {
+		f := &natFake{checkFails: true}
+		n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+		s := v4Settings(true)
+		s.ExitNode = exitNode
+		if err := n.ensureNAT(context.Background(), s); err != nil {
+			t.Fatalf("ensureNAT (exitNode=%q): %v", exitNode, err)
+		}
+		joined := strings.Join(f.calls, "\n")
+		if strings.Contains(joined, "mangle") {
+			t.Errorf("exitNode=%q: must not emit mangle rules:\n%s", exitNode, joined)
+		}
+		if strings.Contains(joined, "--sport") {
+			t.Errorf("exitNode=%q: must not match on --sport (socket MASQUERADE):\n%s", exitNode, joined)
+		}
+	}
+}
