@@ -51,6 +51,12 @@ func tailnetIPv4(ip net.IP) bool {
 	return tailnet.Contains(ip)
 }
 
+// inContainer reports whether we're running inside a Docker container.
+func inContainer() bool {
+	_, err := os.Stat("/.dockerenv")
+	return err == nil
+}
+
 // publicBind reports whether binding bindAddr would expose the UI beyond the
 // local machine / tailnet, in which case a password is mandatory.
 func publicBind(bindAddr string) bool {
@@ -59,6 +65,11 @@ func publicBind(bindAddr string) bool {
 		return true // hostname: resolve conservatively -> treat as public
 	}
 	if ip.IsLoopback() || tailnetIPv4(ip) {
+		return false
+	}
+	// In a container, 0.0.0.0 is not public: Docker's port publishes control
+	// exposure, not the bind address.
+	if inContainer() && ip.IsUnspecified() {
 		return false
 	}
 	if ip.IsPrivate() || ip.IsLinkLocalUnicast() {
@@ -101,7 +112,13 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 
 	c.BindAddr = getenv(*bind, "TR_BIND_ADDR", "")
 	if c.BindAddr == "" {
-		if tailscaleIP != "" {
+		if inContainer() {
+			// In a container, bind to all interfaces: the tailnet IP can
+			// change (admin console, re-auth), and Docker's port publishes
+			// control exposure, not the bind address. Never hardcode the
+			// IP discovered at startup.
+			c.BindAddr = "0.0.0.0"
+		} else if tailscaleIP != "" {
 			c.BindAddr = tailscaleIP
 		} else {
 			c.BindAddr = "127.0.0.1"
