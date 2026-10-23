@@ -16,7 +16,12 @@ mkdir -p /var/lib/tailscale /var/run/tailscale
 # Start tailscaled in the background. If it can't start (e.g. no
 # /dev/net/tun in a smoke-test container), the Go binary still comes up
 # and the UI reports Tailscale as unreachable — never fail the container.
-tailscaled --state=/var/lib/tailscale/tailscaled.state --socket="$SOCK" &
+# TS_USERSPACE=false forces kernel (TUN) mode instead of userspace netstack.
+# Kernel mode is required for iptables forwarding + NAT of WireGuard client
+# traffic to work (userspace netstack doesn't handle forwarded packets).
+# Explicit --tun also helps tailscaled choose kernel mode in containers.
+export TS_USERSPACE=false
+tailscaled --state=/var/lib/tailscale/tailscaled.state --socket="$SOCK" --tun=tailscale0 &
 TAILSCALED_PID=$!
 
 # Wait for the control socket (bounded; warn and continue without it).
