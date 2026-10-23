@@ -233,17 +233,29 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 // stopped — never silently rerouted to another node, which would change
 // egress IP/location) or it vanished from the candidate list. "" means
 // healthy, or no pin set. Recovery is always manual via the picker.
+// If the pinned node exists in the list but isn't marked Selected yet,
+// it's likely a transitional state (Tailscale still switching) — don't warn.
 func exitNodeWarning(pin string, nodes []ts.ExitNode) string {
 	if pin == "" {
 		return ""
 	}
+	pinExists := false
 	for _, n := range nodes {
+		// Flexible match: pin may be short hostname, full MagicDNS, or node ID.
+		if n.Hostname == pin || strings.HasSuffix(pin, "."+n.Hostname) || strings.HasSuffix(n.Hostname, "."+pin) {
+			pinExists = true
+		}
 		if n.Selected {
 			if n.Online {
 				return ""
 			}
 			return fmt.Sprintf("exit node %q is OFFLINE — WireGuard traffic is fail-closed (stopped, not rerouted). Pick another node below to restore the relay; recovery is manual by design", n.Hostname)
 		}
+	}
+	// No node Selected. If the pin exists in the list, Tailscale is likely
+	// still switching — don't false-alarm. Only warn if the pin is gone.
+	if pinExists {
+		return ""
 	}
 	return fmt.Sprintf("pinned exit node %q is not active — traffic is fail-closed (stopped). Pick a node below to restore the relay", pin)
 }
