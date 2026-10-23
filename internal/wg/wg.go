@@ -551,15 +551,22 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	if s.ExitNode != "" {
 		fwmark := strconv.Itoa(s.ListenPort)
 		for _, fam := range []string{"-4", "-6"} {
-			// Delete any existing rule first (idempotent), then add.
-			n.Run(ctx, "ip", fam, "rule", "del", "not", "from", "all", "fwmark", fwmark, "lookup", "52", "pref", "5270")
-			if _, err := n.Run(ctx, "ip", fam, "rule", "add", "not", "from", "all", "fwmark", fwmark, "lookup", "52", "pref", "5270"); err != nil {
+			// Delete any existing rules first (idempotent), then add.
+			// Rule: WireGuard's own traffic (marked with fwmark) bypasses the
+			// exit node by using the main table. Pref 5269 comes before
+			// Tailscale's 5270 (from all lookup 52).
+			n.Run(ctx, "ip", fam, "rule", "del", "fwmark", fwmark, "lookup", "main", "pref", "5269")
+			if _, err := n.Run(ctx, "ip", fam, "rule", "add", "fwmark", fwmark, "lookup", "main", "pref", "5269"); err != nil {
 				return fmt.Errorf("adding fwmark bypass rule: %w", err)
 			}
 		}
 	} else {
 		// No exit node: remove the bypass rules if they exist.
 		fwmark := strconv.Itoa(s.ListenPort)
+		for _, fam := range []string{"-4", "-6"} {
+			n.Run(ctx, "ip", fam, "rule", "del", "fwmark", fwmark, "lookup", "main", "pref", "5269")
+		}
+		// Also clean up the old (incorrect) 5270 rules from previous versions.
 		for _, fam := range []string{"-4", "-6"} {
 			n.Run(ctx, "ip", fam, "rule", "del", "not", "from", "all", "fwmark", fwmark, "lookup", "52", "pref", "5270")
 		}
