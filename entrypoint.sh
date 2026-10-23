@@ -16,12 +16,7 @@ mkdir -p /var/lib/tailscale /var/run/tailscale
 # Start tailscaled in the background. If it can't start (e.g. no
 # /dev/net/tun in a smoke-test container), the Go binary still comes up
 # and the UI reports Tailscale as unreachable — never fail the container.
-# TS_USERSPACE=false forces kernel (TUN) mode instead of userspace netstack.
-# Kernel mode is required for iptables forwarding + NAT of WireGuard client
-# traffic to work (userspace netstack doesn't handle forwarded packets).
-# Explicit --tun also helps tailscaled choose kernel mode in containers.
-export TS_USERSPACE=false
-tailscaled --state=/var/lib/tailscale/tailscaled.state --socket="$SOCK" --tun=tailscale0 &
+tailscaled --state=/var/lib/tailscale/tailscaled.state --socket="$SOCK" &
 TAILSCALED_PID=$!
 
 # Wait for the control socket (bounded; warn and continue without it).
@@ -42,8 +37,6 @@ if [ -S "$SOCK" ]; then
             echo "entrypoint: tailscale up --hostname=${TS_HOSTNAME:-tailrelay}"
             # Non-fatal: a bad key must not crash-loop the container; the
             # web UI's Tailscale section offers manual login as fallback.
-            # Note: tailscale up requires --authkey flag (TS_AUTHKEY env is
-            # only honored by tailscaled, not the CLI). The key is one-time.
             # shellcheck disable=SC2086
             if ! tailscale up --authkey="$TS_AUTHKEY" \
                 --hostname="${TS_HOSTNAME:-tailrelay}" \
@@ -57,14 +50,5 @@ if [ -S "$SOCK" ]; then
 else
     echo "entrypoint: warning: tailscaled socket not available; starting web UI anyway"
 fi
-
-# Wait for Tailscale to have an IPv4 (bounded) so the Go binary binds to the
-# tailnet IP, not 127.0.0.1. The socket existing doesn't mean we're logged in.
-for i in $(seq 1 30); do
-    if [ -n "$(tailscale ip -4 2>/dev/null)" ]; then
-        break
-    fi
-    sleep 1
-done
 
 exec /usr/local/bin/tailrelay "$@"
