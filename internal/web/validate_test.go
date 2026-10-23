@@ -67,7 +67,16 @@ func TestExitNodeWarning(t *testing.T) {
 	}
 	gone := nodes()
 	gone[0].Selected = false
+	// Pin exists in list but not yet selected (transitional) — no warning.
 	w = exitNodeWarning("exit-1", gone)
+	if w != "" {
+		t.Errorf("transitional pin: got %q, want empty (no false alarm during switch)", w)
+	}
+	// Pin vanished from list entirely — warn.
+	vanished := []ts.ExitNode{
+		{Hostname: "exit-2", IP: "100.64.0.3", Online: true},
+	}
+	w = exitNodeWarning("exit-1", vanished)
 	if w == "" || !strings.Contains(w, "not active") {
 		t.Errorf("vanished pin: got %q, want not-active warning", w)
 	}
