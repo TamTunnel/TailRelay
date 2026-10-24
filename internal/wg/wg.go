@@ -504,10 +504,10 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 		[]string{"-A", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
 	addPair("iptables",
 		[]string{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
-		[]string{"-A", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})
+		[]string{"-I", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})
 	addPair("iptables",
 		[]string{"-C", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-		[]string{"-A", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
+		[]string{"-I", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
 	addPair("iptables",
 		[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.PoolCIDR, "-o", tsif, "-j", "MASQUERADE"},
 		[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.PoolCIDR, "-o", tsif, "-j", "MASQUERADE"})
@@ -515,10 +515,10 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	if v6 {
 		addPair("ip6tables",
 			[]string{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
-			[]string{"-A", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})
+			[]string{"-I", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})
 		addPair("ip6tables",
 			[]string{"-C", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-			[]string{"-A", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
+			[]string{"-I", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
 		addPair("ip6tables",
 			[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.IPv6Pool, "-o", tsif, "-j", "MASQUERADE"},
 			[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.IPv6Pool, "-o", tsif, "-j", "MASQUERADE"})
@@ -533,10 +533,10 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 		}
 		addPair("iptables",
 			[]string{"-C", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT"},
-			[]string{"-A", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT"})
+			[]string{"-I", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT"})
 		addPair("iptables",
 			[]string{"-C", "FORWARD", "-i", wan, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-			[]string{"-A", "FORWARD", "-i", wan, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
+			[]string{"-I", "FORWARD", "-i", wan, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
 		addPair("iptables",
 			[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE"},
 			[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE"})

@@ -293,8 +293,8 @@ func TestEnsureNATDirectModeAddsWANRules(t *testing.T) {
 	}
 	joined := strings.Join(f.calls, "\n")
 	for _, want := range []string{
-		"iptables -A FORWARD -i wg0 -o ens3 -j ACCEPT",
-		"iptables -A FORWARD -i ens3 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"iptables -I FORWARD -i wg0 -o ens3 -j ACCEPT",
+		"iptables -I FORWARD -i ens3 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
 		"iptables -t nat -A POSTROUTING -s 10.7.0.0/24 -o ens3 -j MASQUERADE",
 	} {
 		if !strings.Contains(joined, want) {
