@@ -10,19 +10,17 @@ RUN CGO_ENABLED=0 go build -trimpath \
     -o /tailrelay ./cmd/tailrelay
 
 # ---- run ----
-# Use the official Tailscale image as base: it ships a full Tailscale build
-# with kernel (TUN) mode support. The static binaries from pkgs.tailscale.com
-# are userspace-only, which breaks iptables forwarding + NAT for WireGuard
-# client traffic (userspace netstack doesn't handle forwarded packets).
-# TS_USERSPACE=false (set in entrypoint.sh) forces kernel mode.
-# The container runs its OWN tailscaled in the same network namespace as
-# WireGuard (tailguard-style isolation): the host's Tailscale — if any — is
-# never touched, and host routing is unaffected.
-FROM tailscale/tailscale:stable
-# Alpine-based (see https://github.com/tailscale/tailscale/blob/main/Dockerfile).
-# Already ships iptables, iproute2, ca-certificates. Add wireguard-tools for
-# the `wg` CLI used by TailRelay's NetOps.
-RUN apk add --no-cache wireguard-tools \
+# Use the official Tailscale image as base: it ships containerboot (the
+# official container init) which honors TS_USERSPACE=false for kernel (TUN)
+# mode. Running tailscaled directly ignores TS_USERSPACE and defaults to
+# userspace WireGuard, which breaks forwarded + NATed WireGuard client
+# traffic via exit nodes. Containerboot is required for the data path.
+# Version pinned (not :stable) because containerboot behavior changes
+# across releases; bump deliberately after testing.
+FROM tailscale/tailscale:v1.104.2
+# Alpine-based. Already ships iptables, iproute2, ca-certificates. Add
+# wireguard-tools (for `wg` CLI) and tcpdump (for exit-node debugging).
+RUN apk add --no-cache wireguard-tools tcpdump \
  && mkdir -p /var/lib/tailrelay /var/lib/tailscale /var/run/tailscale /etc/wireguard
 COPY --from=build /tailrelay /usr/local/bin/tailrelay
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
