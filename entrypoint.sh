@@ -45,9 +45,11 @@ if [ -c /dev/net/tun ]; then
     else
         echo "entrypoint: warning: tailscaled socket not available; starting web UI anyway"
     fi
-    # Bounded wait for Tailscale IPv4 (so Go binds tailnet IP, not 127.0.0.1)
+    # Bounded wait for Tailscale IPv4 (so Go binds tailnet IP, not 127.0.0.1).
+    # Each `tailscale ip` call has its own timeout so a missing socket
+    # doesn't hang the loop forever (containerboot failure case).
     for i in $(seq 1 30); do
-        if [ -n "$(tailscale ip -4 2>/dev/null)" ]; then
+        if [ -n "$(timeout 2 tailscale ip -4 2>/dev/null)" ]; then
             break
         fi
         sleep 1
