@@ -93,7 +93,7 @@ func run(args []string) error {
 }
 
 func newWG(cfg *config.Config, run wg.Runner) *wg.NetOps {
-	return &wg.NetOps{Run: run, Iface: cfg.Iface, TSIface: cfg.TailscaleIface}
+	return &wg.NetOps{Run: run, Iface: cfg.Iface, TSIface: cfg.TailscaleIface, DashboardPort: cfg.Port}
 }
 
 // ensureState loads the state file or initializes it on first run.

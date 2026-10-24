@@ -322,6 +322,10 @@ type NetOps struct {
 	Run     Runner
 	Iface   string // wireguard interface, e.g. wg0
 	TSIface string // tailscale interface NAT target, e.g. tailscale0
+	// DashboardPort is the web UI port. WG clients must never reach the
+	// dashboard (they'd be full admins in password-less mode), so ensureNAT
+	// drops wg0→dashboard traffic in INPUT. Zero means no dashboard rule.
+	DashboardPort int
 }
 
 // TSIfaceExists reports whether the tailscale interface exists
@@ -507,6 +511,25 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	addPair("iptables",
 		[]string{"-C", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"},
 		[]string{"-I", "INPUT", "1", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
+	// Block WG clients from reaching the dashboard. WG→host traffic takes
+	// the INPUT path (not FORWARD), so the kill-switch DROP doesn't cover
+	// it. In password-less mode a WG client reaching the dashboard is a
+	// full admin (can download all client keys, re-auth Tailscale). Admins
+	// access the dashboard via their tailnet device, never via a WG client.
+	if n.DashboardPort > 0 {
+		dport := strconv.Itoa(n.DashboardPort)
+		addPair("iptables",
+			[]string{"-C", "INPUT", "-i", n.Iface, "-p", "tcp", "--dport", dport, "-j", "DROP"},
+			[]string{"-I", "INPUT", "1", "-i", n.Iface, "-p", "tcp", "--dport", dport, "-j", "DROP"})
+	}
+	// Block cloud metadata endpoints. In direct mode a WG client could
+	// otherwise curl 169.254.169.254 (Oracle/AWS/GCP IMDS) and harvest
+	// instance credentials. These DROP rules sit above the WAN ACCEPTs.
+	for _, meta := range []string{"169.254.169.254/32", "169.254.0.0/16"} {
+		addPair("iptables",
+			[]string{"-C", "FORWARD", "-d", meta, "-j", "DROP"},
+			[]string{"-I", "FORWARD", "1", "-d", meta, "-j", "DROP"})
+	}
 	// Tailscale0 client-forwarding rules: only in exit mode. In direct mode
 	// client traffic goes via WAN, not the tailnet — adding these pairs
 	// unconditionally would re-add them after the direct-mode cleanup

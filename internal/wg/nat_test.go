@@ -52,7 +52,10 @@ func dualSettings(ks bool) state.Settings {
 func dropCalls(calls []string, flag string) []string {
 	var out []string
 	for _, c := range calls {
-		if strings.Contains(c, "-j DROP") && strings.Contains(c, "iptables "+flag+" ") {
+		// Kill-switch DROP only (wg0 ! -o tailscale0). Metadata DROPs
+		// (-d 169.254...) and dashboard DROPs (-i wg0 --dport) are
+		// separate rules and must not be counted here.
+		if strings.Contains(c, "-j DROP") && strings.Contains(c, "iptables "+flag+" ") && strings.Contains(c, "! -o tailscale0") {
 			out = append(out, c)
 		}
 	}
@@ -284,9 +287,11 @@ func TestEnsureNATDirectModeAddsWANRules(t *testing.T) {
 			t.Errorf("missing rule %q\ncalls:\n%s", want, joined)
 		}
 	}
-	// No kill-switch DROP installed in direct mode (only -C checks, no -A).
+	// No kill-switch DROP installed in direct mode (only -C checks, no -I).
+	// Metadata DROPs (-d 169.254...) are expected in both modes and are
+	// not kill-switch DROPs, so exclude them here.
 	for _, c := range f.calls {
-		if strings.Contains(c, "-I FORWARD 1") && strings.Contains(c, "-j DROP") {
+		if strings.Contains(c, "-I FORWARD 1") && strings.Contains(c, "-j DROP") && strings.Contains(c, "! -o tailscale0") {
 			t.Errorf("direct mode must not install kill-switch DROP, got: %q", c)
 		}
 	}
@@ -507,6 +512,45 @@ func TestEnsureNATDirectModeNoTailscaleRules(t *testing.T) {
 		}
 		if strings.Contains(c, "-A POSTROUTING") && strings.Contains(c, "tailscale0") {
 			t.Errorf("direct mode must not add tailscale0 MASQUERADE, got: %q", c)
+		}
+	}
+}
+
+func TestEnsureNATBlocksDashboardFromWG(t *testing.T) {
+	f := &natFake{checkFails: true}
+	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0", DashboardPort: 8080}
+	s := v4Settings(true)
+	s.ExitNode = "home-router"
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	// WG clients must never reach the dashboard (they'd be full admins
+	// in password-less mode). INPUT path, not FORWARD, so the kill
+	// switch DROP doesn't cover it.
+	want := "iptables -I INPUT 1 -i wg0 -p tcp --dport 8080 -j DROP"
+	if !strings.Contains(joined, want) {
+		t.Errorf("missing dashboard INPUT DROP, want %q in:\n%s", want, joined)
+	}
+}
+
+func TestEnsureNATBlocksCloudMetadata(t *testing.T) {
+	for _, exitNode := range []string{"", "home-router"} {
+		f := &natFake{checkFails: true}
+		n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+		s := v4Settings(true)
+		s.ExitNode = exitNode
+		if err := n.ensureNAT(context.Background(), s); err != nil {
+			t.Fatalf("ensureNAT (exitNode=%q): %v", exitNode, err)
+		}
+		joined := strings.Join(f.calls, "\n")
+		for _, want := range []string{
+			"iptables -I FORWARD 1 -d 169.254.169.254/32 -j DROP",
+			"iptables -I FORWARD 1 -d 169.254.0.0/16 -j DROP",
+		} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("exitNode=%q: missing metadata block %q\n%s", exitNode, want, joined)
+			}
 		}
 	}
 }

@@ -113,6 +113,10 @@ func (s *Store) Path() string { return s.path }
 func (s *Store) Load() (*State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.loadLocked()
+}
+
+func (s *Store) loadLocked() (*State, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		return nil, err
@@ -128,6 +132,10 @@ func (s *Store) Load() (*State, error) {
 func (s *Store) Save(st *State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.saveLocked(st)
+}
+
+func (s *Store) saveLocked(st *State) error {
 	data, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return err
@@ -160,15 +168,21 @@ func (s *Store) Save(st *State) error {
 }
 
 // Update loads, applies fn, and saves atomically.
+// The mutex is held across the whole read-modify-write so two concurrent
+// Updates can't both load the same state and have one's Save overwrite
+// the other's changes (e.g. two simultaneous client adds allocating the
+// same next IP).
 func (s *Store) Update(fn func(*State) error) error {
-	st, err := s.Load()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, err := s.loadLocked()
 	if err != nil {
 		return err
 	}
 	if err := fn(st); err != nil {
 		return err
 	}
-	return s.Save(st)
+	return s.saveLocked(st)
 }
 
 // Exists reports whether the state file exists.
