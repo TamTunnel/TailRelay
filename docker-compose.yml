@@ -17,6 +17,7 @@ services:
     container_name: tailrelay
     cap_add:
       - NET_ADMIN
+      - SYS_MODULE # recommended by Tailscale docs for kernel networking
     devices:
       - /dev/net/tun:/dev/net/tun
     sysctls:
