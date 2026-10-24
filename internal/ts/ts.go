@@ -54,6 +54,14 @@ type rawStatus struct {
 			HostName string `json:"HostName"`
 		} `json:"Hostinfo"`
 	} `json:"ExitNodeStatus"`
+	// Peer maps node ID -> peer info. Used to resolve the exit node's
+	// hostname when ExitNodeStatus.Hostinfo is empty (common: the JSON
+	// often omits Hostinfo for the exit node, leaving only ID + IPs).
+	Peer map[string]struct {
+		HostName     string   `json:"HostName"`
+		DNSName      string   `json:"DNSName"`
+		TailscaleIPs []string `json:"TailscaleIPs"`
+	} `json:"Peer"`
 }
 
 // ParseStatus parses `tailscale status --json` output.
@@ -71,6 +79,9 @@ func ParseStatus(data []byte) (*Status, error) {
 		st.UsingExitNode = raw.ExitNodeStatus.Online
 		if raw.ExitNodeStatus.Hostinfo != nil && raw.ExitNodeStatus.Hostinfo.HostName != "" {
 			st.ExitNodeName = raw.ExitNodeStatus.Hostinfo.HostName
+		} else if name := peerHostnameForExitNode(raw); name != "" {
+			// Resolve via the peer list: match exit node ID or IP to a peer.
+			st.ExitNodeName = name
 		} else if len(raw.ExitNodeStatus.TailscaleIPs) > 0 {
 			// Fall back to IP, not the cryptic node ID (e.g. "nteNM65qby11CNTRL").
 			// The UI's exit-node list (from `tailscale exit-node list`) has
@@ -81,6 +92,37 @@ func ParseStatus(data []byte) (*Status, error) {
 		}
 	}
 	return st, nil
+}
+
+// peerHostnameForExitNode resolves the exit node's hostname from the peer
+// list, matching by node ID first, then by tailnet IP. Returns "" if no match.
+func peerHostnameForExitNode(raw rawStatus) string {
+	if raw.ExitNodeStatus == nil {
+		return ""
+	}
+	// Match by node ID (exact key in the Peer map).
+	if p, ok := raw.Peer[raw.ExitNodeStatus.ID]; ok && p.HostName != "" {
+		return p.HostName
+	}
+	// Match by tailnet IP (strip CIDR suffix for comparison).
+	for _, peer := range raw.Peer {
+		for _, pip := range peer.TailscaleIPs {
+			pipBase := pip
+			if i := strings.IndexByte(pip, '/'); i >= 0 {
+				pipBase = pip[:i]
+			}
+			for _, eip := range raw.ExitNodeStatus.TailscaleIPs {
+				eipBase := eip
+				if i := strings.IndexByte(eip, '/'); i >= 0 {
+					eipBase = eip[:i]
+				}
+				if pipBase == eipBase && peer.HostName != "" {
+					return peer.HostName
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // GetStatus runs `tailscale status --json`.
