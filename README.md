@@ -14,9 +14,9 @@ Tailrelay runs on a VPS and does three small jobs:
 
 1. **It's a WireGuard server.** It generates the server keys, hands each client the next free IP (from `10.7.0.0/24` by default), and gives you a `.conf` file plus a QR code per client. Presets for DNS, MTU and keepalive are tunable.
 2. **It bridges into Tailscale.** Client traffic is NATed onto the tailnet interface, so WireGuard-only devices can reach your tailnet.
-3. **It lets you pick a Tailscale exit node** from the web UI — so all that WireGuard traffic exits through whichever country/node you choose.
+3. **It lets you pick a Tailscale exit node** from the web UI — so all that WireGuard traffic exits through whichever country/node you choose. Or pick direct mode and traffic exits via the VPS itself.
 
-One static Go binary (~9 MB), no runtime, no database — state is a single JSON file. A web UI manages everything. It was inspired by [TailGuard](https://github.com/juhovh/tailguard) (which bridges an *existing* WireGuard network into Tailscale); Tailrelay goes the other direction and *creates* the WireGuard server.
+One static Go binary (~14 MB), no runtime, no database — state is a single JSON file. A web UI manages everything. It was inspired by [TailGuard](https://github.com/juhovh/tailguard) (which bridges an *existing* WireGuard network into Tailscale); Tailrelay goes the other direction and *creates* the WireGuard server.
 
 ## Quick start
 
@@ -24,101 +24,86 @@ One static Go binary (~9 MB), no runtime, no database — state is a single JSON
 
 - A Linux VPS (any distro with a modern kernel).
 - **Kernel WireGuard** (`wireguard` kernel module) and the `wg`, `ip`, `iptables`, `sysctl` tools (`ip6tables` too if you keep the default dual-stack IPv6).
-- Tailrelay enables `net.ipv4.ip_forward=1` itself on start, plus `net.ipv6.conf.all.forwarding=1` when the IPv6 pool is enabled.
-- **Tailscale installed and logged in** on the VPS (`tailscaled` running). Tailrelay does not install Tailscale for you — installing it is distro-specific and privileged, so it stays out of scope. It *can* run `tailscale up --authkey=...` for you from the UI if you hand it a key.
-- Root (or at least `NET_ADMIN`) — creating network interfaces and NAT rules requires it.
+- **Tailscale installed and logged in** on the VPS (`tailscaled` running, kernel mode). Tailrelay does not install Tailscale for you — installing it is distro-specific and privileged, so it stays out of scope. It *can* run `tailscale up --authkey=...` for you from the UI if you hand it a key.
+- Root — creating network interfaces and NAT rules requires it.
+- **UDP port 51820** (or your chosen WireGuard port) reachable from the internet — open it in your cloud firewall / security group (e.g. Oracle NSG, AWS Security Group). This is the one firewall rule TailRelay cannot add for you, because it lives outside the host.
 
-### Run it
+### Install
 
 ```sh
-# install the binary
+# 1. Install Tailscale (if not already installed)
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+
+# 2. Install WireGuard tools (if not already installed)
+# Ubuntu/Debian: sudo apt install wireguard-tools
+# Fedora: sudo dnf install wireguard-tools
+# Arch: sudo pacman -S wireguard-tools
+
+# 3. Install TailRelay
 sudo install -m 755 tailrelay /usr/local/bin/tailrelay
-
-# first run creates /var/lib/tailrelay/state.json and brings up wg0
-sudo tailrelay
-```
-
-Open the web UI at your VPS's tailnet IP, port 8080 — e.g. `http://100.64.0.5:8080`. By default Tailrelay binds **only** to the Tailscale interface, so your tailnet login *is* the authentication. No password needed.
-
-Then: **Clients → Add client → scan the QR code** with the WireGuard app. Traffic from that client now flows `device → VPS (wg0) → tailnet → your chosen exit node`.
-
-### systemd (recommended)
-
-```sh
 sudo cp deploy/tailrelay.service /etc/systemd/system/
-sudo mkdir -p /etc/tailrelay
-# optional: echo 'TR_ADMIN_PASSWORD=...' | sudo tee /etc/tailrelay/env
 sudo systemctl enable --now tailrelay
 ```
 
-### Docker
+That's it. TailRelay creates `/var/lib/tailrelay/state.json` on first run, brings up `wg0`, and sets up all firewall rules automatically (see [Firewall rules](#firewall-rules) below).
 
-The container is a self-contained bridge appliance: it runs its **own**
-`tailscaled` in the same network namespace as WireGuard (tailguard-style
-isolation). The host does **not** need Tailscale installed, and the host's
-network stack — including any host Tailscale — is never touched.
+### Use it
 
-**Prerequisites:**
-- Docker installed.
-- A Tailscale auth key ([generate one](https://login.tailscale.com/admin/settings/keys)) — one time; the container's node identity persists in a volume. (Or skip it and log in from the web UI's Tailscale section.)
-- UDP port `51820` (or your chosen WireGuard port) reachable from the internet — open it in your cloud firewall / security group (e.g. Oracle NSG).
+Open the web UI at your VPS's tailnet IP, port 8080 — e.g. `http://100.100.20.5:8080`. By default TailRelay binds **only** to the Tailscale interface, so your tailnet login *is* the authentication. No password needed.
 
-**Quick start** (prebuilt image from GHCR):
+Then: **Clients → Add client → scan the QR code** with the WireGuard app. Traffic from that client now flows:
 
-```sh
-docker pull ghcr.io/tamtunnel/tailrelay:latest
+- **Exit node mode:** `device → VPS (wg0) → tailnet → your chosen exit node → internet`
+- **Direct mode:** `device → VPS (wg0) → VPS WAN → internet`
 
-docker run -d --name tailrelay --restart unless-stopped \
-  --cap-add NET_ADMIN --device /dev/net/tun \
-  -p 51820:51820/udp -p 8080:8080 \
-  -v tailrelay-state:/var/lib/tailrelay \
-  -v tailscale-state:/var/lib/tailscale \
-  -e TS_AUTHKEY=tskey-auth-... \
-  -e TR_ENDPOINT=$(curl -s api.ipify.org):51820 \
-  ghcr.io/tamtunnel/tailrelay:latest
-```
+Pick the mode in the dashboard: select an exit node from the list, or "No exit node (direct)".
 
-Then open the web UI at `http://<container-tailscale-ip>:8080` (shown in the
-container log on startup, or `docker exec tailrelay tailscale ip -4`).
+### If you're behind 1:1 NAT (e.g. Oracle Cloud)
 
-**With docker compose:**
+If your VPS has a private IP (e.g. `10.0.0.50`) NATed to a public IP (e.g. `202.19.29.40`), set the public endpoint before first run so client configs use the right address:
 
 ```sh
-# set TS_AUTHKEY in docker-compose.yml (or leave it out and use the web UI)
-docker compose up -d
+# Option 1: env file (recommended with systemd)
+echo 'TR_ENDPOINT=202.19.29.40:51820' | sudo tee /etc/tailrelay/env
+sudo systemctl restart tailrelay
+
+# Option 2: flag
+sudo TR_ENDPOINT=202.19.29.40:51820 tailrelay
 ```
 
-**Configuration** — environment variables:
+Without this, TailRelay auto-detects via `api.ipify.org` on first run only (see [Privacy](#privacy)).
 
-| Variable | Default | Description |
-|---|---|---|
-| `TS_AUTHKEY` | *(none)* | Tailscale auth key for the container's own node; use a **one-time (non-reusable)** key from https://login.tailscale.com/admin/settings/keys. Omit to log in via web UI (requires `TR_BIND_ADDR=0.0.0.0` + `TR_ADMIN_PASSWORD` so the UI is reachable before Tailscale is up) |
-| `TS_HOSTNAME` | `tailrelay` | Tailnet hostname for the container's node |
-| `TR_PORT` | `8080` | Web UI port |
-| `TR_BIND_ADDR` | `tailscale ip -4` (else `127.0.0.1`) | Web UI bind address |
-| `TR_ADMIN_PASSWORD` | *(none)* | **Required** if binding beyond localhost/tailnet. **Anyone on your tailnet can administer TailRelay** (add WireGuard peers, change exit nodes, re-register the node) — set a password unless you fully trust every tailnet device |
-| `TR_ENDPOINT` | *(none)* | Public `IP:port` clients connect to (e.g. `203.0.113.1:51820`) |
+## Firewall rules
 
-**Updating:**
+TailRelay sets up **all host firewall rules automatically** on startup and on every Apply. You never need to touch iptables manually.
 
-```sh
-docker pull ghcr.io/tamtunnel/tailrelay:latest
-docker stop tailrelay && docker rm tailrelay
-# re-run the same docker run command above
-```
+### What TailRelay adds
 
-Keys, settings, and the Tailscale node identity persist in the
-`tailrelay-state` and `tailscale-state` volumes. The image bundles the latest
-stable Tailscale at build time (rebuilt weekly by CI), and the dashboard
-shows the running Tailscale version — `docker pull` is the whole update path.
+| Rule | Purpose |
+|---|---|
+| `sysctl net.ipv4.ip_forward=1` | Enable IPv4 forwarding |
+| `sysctl net.ipv6.conf.all.forwarding=1` | Enable IPv6 forwarding (if v6 pool enabled) |
+| `INPUT -p udp --dport 51820 -j ACCEPT` | Allow WireGuard handshakes (inserted at top, beats host REJECT-all) |
+| `FORWARD -i wg0 -o tailscale0 -j ACCEPT` | Client → tailnet (exit mode) |
+| `FORWARD -i tailscale0 -o wg0 --ctstate RELATED,ESTABLISHED -j ACCEPT` | Return traffic (exit mode) |
+| `FORWARD -i wg0 -o <WAN> -j ACCEPT` | Client → WAN (direct mode) |
+| `FORWARD -i <WAN> -o wg0 --ctstate RELATED,ESTABLISHED -j ACCEPT` | Return traffic (direct mode) |
+| `POSTROUTING -s 10.7.0.0/24 -o tailscale0 -j MASQUERADE` | NAT client traffic to tailnet IP (exit mode) |
+| `POSTROUTING -s 10.7.0.0/24 -o <WAN> -j MASQUERADE` | NAT client traffic to WAN IP (direct mode) |
+| `FORWARD -i wg0 ! -o tailscale0 -j DROP` | Kill switch (exit mode only, inserted at top) |
+| `ip rule: to 10.7.0.0/24 lookup main pref 5268` | Route return traffic to wg0, not back to exit node |
+| `ip rule: fwmark <port> lookup main pref 5269` | WireGuard handshakes bypass exit node |
 
-**Notes:**
-- Bridge networking + `NET_ADMIN`: the container owns its network namespace,
-  so exit-node routing stays inside the container and can't fight the host.
-- The old host-socket setup (mounting `/var/run/tailscale`) is gone; if
-  you're migrating, remove the old container — the new container registers
-  as its own tailnet node on first `TS_AUTHKEY` login (the `tailscale-state`
-  volume preserves its identity across recreates).
+The same rules exist for IPv6 (`ip6tables`) when the v6 pool is enabled.
+
+### What you must do manually
+
+Only one thing: **open UDP 51820 in your cloud firewall** (Oracle NSG, AWS Security Group, GCP Firewall, etc.). TailRelay cannot do this because it lives outside the host. Everything else is automatic.
+
+### Rule reconciliation
+
+On every startup and every Apply (settings save, exit-node change, client add/remove), TailRelay re-asserts all rules from state and removes stale rules from the previous mode. Switching between exit-node and direct mode cleanly swaps the rule sets — no leftovers, no leaks.
 
 ## Configuration
 
@@ -146,9 +131,13 @@ Threat model, plainly stated:
 
 **Public binds need TLS.** Without it, the admin password and session cookie travel in cleartext HTTP. Either pass `-tls-cert`/`-tls-key` (or `TR_TLS_CERT`/`TR_TLS_KEY`) so Tailrelay serves HTTPS directly — session/CSRF cookies then carry the `Secure` attribute — or terminate TLS in a reverse proxy in front of it.
 
+**No IP leaks.** The kill switch (default: on) installs firewall rules that drop any WireGuard traffic not headed for the Tailscale interface (`-i wg0 ! -o tailscale0 -j DROP` in both `iptables` and `ip6tables`, inserted at the top of FORWARD). If `tailscaled` crashes and `tailscale0` vanishes, client traffic is dropped — it can never fall through to the VPS's direct WAN and expose your real IP. DNS goes via the tunnel (client DNS `1.1.1.1` with full-tunnel `AllowedIPs`), so queries exit via the exit node, never via the client's ISP.
+
+**Traffic looks normal.** WireGuard MTU 1420 is inside the encrypted tunnel (not visible to the internet). Egress from the exit node uses the exit node's standard MTU and networking — no Tailscale headers, no VPN signatures, no fixed TCPMSS values. The internet sees plain traffic from the exit node's IP. One known weak signal: client TCP MSS ≈ 1380 (from MTU 1420) instead of the typical 1460 — detectable as an anomaly but not a definitive VPN identifier, and it reveals nothing about the client's real IP.
+
 **Exit nodes never auto-switch.** A dead pinned exit node fails closed: Tailscale stops routing (it does not pick another node — `auto:any` is never offered in the picker), so WireGuard client traffic stops too. Recovery is manual: the dashboard shows a prominent warning banner naming the offline node, and you pick another one. Nodes are pinned by MagicDNS hostname, never by tailnet IP.
 
-**Kill switch (default: on).** Setting *Kill Switch (Pause when Tailscale is down)* installs firewall rules that drop any WireGuard traffic not headed for the Tailscale interface (`-i wg0 ! -o tailscale0 -j DROP` in both `iptables` and `ip6tables`, appended after the relay ACCEPTs). If `tailscaled` itself crashes and `tailscale0` vanishes, client traffic is dropped — it can never fall through to the VPS's direct WAN and expose your real IP. `Apply` reconciles the rules from the setting on every run; turning the switch off removes them. The dashboard shows the live state:
+**Kill switch states.** The dashboard shows the live state:
 
 | State | Meaning |
 |---|---|
@@ -166,7 +155,7 @@ Other posture notes:
 
 ```
                   ┌─────────────────────────────────────────┐
-  WireGuard       │  VPS                                      │
+  WireGuard       │  VPS (host deployment)                    │
   clients         │                                           │
    (phone,        │  wg0 ──NAT──▶ tailscale0 ─┐                │
    laptop, ...) ─▶│  10.7.0.1, fd..::1  ▲      │                │
@@ -174,16 +163,19 @@ Other posture notes:
                   │       │  - generates wg0.conf             │
                   │       │  - manages peers via wg setconf   │
                   │       │  - iptables/ip6tables MASQUERADE  │
+                  │       │  - ip rules 5268/5269 for routing │
                   └───────┼──────────────────────────────┼───┘
                           │                               │
                      tailnet                   chosen exit node
+                                               (or direct WAN)
 ```
 
-- **Single static binary** (`CGO_ENABLED=0`, ~9 MB). No wireguard-go vendored — it drives the kernel WireGuard module via the `wg`/`ip` CLI tools, which keeps the binary small and the datapath in the kernel where it's fast.
-- **stdlib-first**: `net/http` + `html/template` with `//go:embed` templates, server-rendered pages, a pinch of vanilla JS (none, actually — plain forms). Only two external deps: `golang.org/x/crypto` (X25519 keygen with correct clamping, bcrypt) and `github.com/skip2/go-qrcode`.
+- **Single static binary** (`CGO_ENABLED=0`, ~14 MB). No wireguard-go vendored — it drives the kernel WireGuard module via the `wg`/`ip` CLI tools, which keeps the binary small and the datapath in the kernel where it's fast. Host Tailscale runs in kernel mode too, so forwarded traffic uses full kernel conntrack/NAT.
+- **stdlib-first**: `net/http` + `html/template` with `//go:embed` templates, server-rendered pages, plain forms. Only two external deps: `golang.org/x/crypto` (X25519 keygen with correct clamping, bcrypt) and `github.com/skip2/go-qrcode`.
 - **State**: one JSON file, atomic writes, 0600. No database to back up — copy the file.
-- **Idempotent apply**: every change (add/remove/rename client, settings save) rewrites `wg0.conf` and re-syncs peers with `wg setconf`, then re-asserts the iptables rules (checked with `-C` first, so re-applying is safe).
+- **Idempotent apply**: every change (add/remove/rename client, settings save, exit-node switch) rewrites `wg0.conf` and re-syncs peers with `wg setconf`, then re-asserts the iptables rules (checked with `-C` first, so re-applying is safe) and removes stale rules from the previous mode.
 - **Tailscale bridge**: `tailscale status --json` for the dashboard, `tailscale exit-node list` for candidates, `tailscale set --exit-node=` to steer all relayed traffic. The desired exit node and advertised routes are re-asserted on startup.
+- **Routing**: two `ip rule` entries make exit-node mode work. Pref 5269 sends WireGuard's own traffic (handshakes, marked with the listen-port fwmark) via the main table, bypassing Tailscale's exit-node table 52. Pref 5268 sends de-NATed return traffic (dst = client pool) via the main table, so it reaches `wg0` instead of looping back to the exit node.
 
 Package layout:
 
@@ -198,14 +190,11 @@ internal/web       handlers, templates, sessions, CSRF
 
 ## FAQ
 
-**Do I need Docker?**
-No. The binary + systemd unit is the primary, lightest path. Docker is provided for those who prefer containers — see below.
-
 **How is this different from TailGuard?**
 TailGuard connects an *existing* WireGuard network into your tailnet (you bring `wg0.conf`). Tailrelay *creates* the WireGuard server for you — key generation, client configs, QR codes — and bridges it into Tailscale. Different direction, complementary tools.
 
 **Can WireGuard clients reach my tailnet devices, or only the exit node?**
-Both. With an exit node selected, all client traffic exits through it (full tunnel). Without one, clients are NATed onto the tailnet and can reach tailnet IPs directly.
+Both. With an exit node selected, all client traffic exits through it (full tunnel). Without one (direct mode), clients are NATed onto the tailnet and can reach tailnet IPs directly, and internet traffic exits via the VPS WAN.
 
 **Where are the private keys?**
 `/var/lib/tailrelay/state.json` (0600) and the generated `/etc/wireguard/wg0.conf` (0600). Back up the state file and you can rebuild the server anywhere.
@@ -217,24 +206,22 @@ You can't while clients exist — the UI refuses the change and tells you to rem
 Yes — dual-stack is the default (WG Easy-style). On first run Tailrelay generates a random ULA `/64` (e.g. `fd12:3456:789a::/64`), the server takes `::1`, clients get `::2`, `::3`…, and the default client `AllowedIPs` is `0.0.0.0/0, ::/0`. NAT (`ip6tables` MASQUERADE) and the kill-switch DROP cover both families. To run IPv4-only, clear the IPv6 pool field in Settings (the UI also normalizes the default `AllowedIPs` back to `0.0.0.0/0` for you — leaving `::/0` with no v6 pool would blackhole client IPv6 traffic). The v6 pool, like the v4 pool, can't be changed while clients exist.
 
 **How do I update?**
-Replace the binary, `systemctl restart tailrelay`. State and `wg0.conf` are preserved; the interface is re-applied on start.
+Replace the binary, `systemctl restart tailrelay`. State and `wg0.conf` are preserved; the interface and firewall rules are re-applied on start.
 
-## Docker vs binary
+**What if my firewall rules get flushed?**
+Restart TailRelay (`systemctl restart tailrelay`) or click Apply in Settings — both re-assert all rules from state.
 
-We ship both, but they aren't equal:
+## Docker (deprecated)
 
-| | Binary + systemd | Docker |
-|---|---|---|
-| Overhead | none | container runtime, image pull |
-| Needs | root once at install | `NET_ADMIN`, `/dev/net/tun`, published ports |
-| Tailscale access | native (host `tailscaled`) | bundled in image (own `tailscaled`) |
-| Best for | a VPS you control | fleets / immutable infra |
+> **Docker deployment is deprecated and unmaintained.** The files (`Dockerfile`, `docker-compose.yml`, `entrypoint.sh`) are kept for existing users but will be removed in a future release. New deployments should use the host binary above.
 
-Honest take: on a single VPS, the binary is simpler and lighter — Docker buys you packaging consistency and a self-contained Tailscale (no host dependency), at the cost of a heavier image. Use Docker if your workflow is already container-based or you need exit-node relay (the supported path for that); otherwise take the binary.
+**Direct mode only.** Exit-node mode does **not** work in containers: Tailscale runs in userspace mode inside a container, which bypasses kernel conntrack/NAT for forwarded traffic. UDP (DNS) works, but TCP connections fail — return packets arrive but never reach WireGuard clients. This is a fundamental container limitation, not a TailRelay bug. Direct mode (no exit node) works fine in Docker.
+
+If you still use Docker, the setup is unchanged from before (see git history for the Docker section). Host deployment is the only supported path for exit nodes.
 
 ## Tailscale prerequisite
 
-**Binary install:** Tailrelay assumes `tailscaled` is **already installed and (usually) logged in** on the VPS:
+Tailrelay assumes `tailscaled` is **already installed and (usually) logged in** on the VPS:
 
 ```sh
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -244,8 +231,6 @@ sudo tailscale up
 If it's installed but not logged in, the dashboard offers a `tailscale up` form — paste an auth key (from https://login.tailscale.com/admin/settings/keys), and Tailrelay runs `tailscale up --authkey=...` once. The key is never stored.
 
 Why not install Tailscale automatically? Installing a privileged network daemon is distro-specific (apt/dnf/pacman/apk…) and a security-sensitive step that should be a conscious admin decision, not a side effect of starting a web UI. Out of scope by design.
-
-**Docker install:** none of the above applies — the image bundles its own `tailscaled` (latest stable at build time, rebuilt weekly by CI). Pass `TS_AUTHKEY` on first run or use the dashboard's login form.
 
 ## Privacy
 

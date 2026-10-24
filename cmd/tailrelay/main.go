@@ -82,6 +82,7 @@ func run(args []string) error {
 	srv := &http.Server{Addr: cfg.Addr(), Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second}
 	if cfg.TLSEnabled() {
 		log.Printf("listening on https://%s (TLS)", cfg.Addr())

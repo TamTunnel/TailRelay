@@ -138,22 +138,37 @@ func NewServer(d Deps) (*Server, http.Handler, error) {
 	var h http.Handler = mux
 	h = s.authMiddleware(h)
 	h = s.csrfMiddleware(h)
-	h = securityHeaders(h)
+	h = s.securityHeaders(h)
+	h = maxBodyBytes(h)
 	h = logRequests(h)
 	return s, h, nil
 }
 
 // --- middleware ---
 
-func securityHeaders(next http.Handler) http.Handler {
+func (s *Server) securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if s.tls() {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		// No inline scripts/styles anywhere (confirm dialogs live in
 		// /static/app.js); QR images are same-origin, hence img-src 'self'.
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// maxBodyBytes caps POST form bodies to prevent memory-exhaustion DoS.
+// 1 MB is generous for these forms (client names, settings, authkeys).
+func maxBodyBytes(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -221,7 +236,7 @@ func (s *Server) csrfToken(w http.ResponseWriter, r *http.Request) string {
 		return ""
 	}
 	http.SetCookie(w, &http.Cookie{Name: anonCSRFCookie, Value: tok, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.tls()})
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.tls()})
 	return tok
 }
 
@@ -408,7 +423,7 @@ func (s *Server) handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	s.sessions[tok] = session{csrf: csrf, expires: time.Now().Add(12 * time.Hour)}
 	s.mu.Unlock()
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: tok, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: s.tls(), MaxAge: 12 * 3600})
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.tls(), MaxAge: 12 * 3600})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -419,6 +434,6 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}
 	// Secure must match the login cookie or the browser keeps the old one.
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, MaxAge: -1, Path: "/", Secure: s.tls()})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, MaxAge: -1, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.tls()})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }

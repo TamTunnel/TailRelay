@@ -386,6 +386,9 @@ func (n *NetOps) Apply(ctx context.Context, st *state.State, confPath string) er
 	// [Interface]; the rendered file also carries wg-quick directives
 	// (Address, MTU) which setconf rejects, so feed it a stripped copy.
 	setconfPath := confPath + ".setconf"
+	// Clean up a stale .setconf from a previous crash first: it contains
+	// the server private key and the deferred remove never ran.
+	os.Remove(setconfPath)
 	if err := os.WriteFile(setconfPath, []byte(StripForSetconf(conf)), 0o600); err != nil {
 		return err
 	}
@@ -528,11 +531,19 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	// Direct mode (no exit node): forward client traffic via the host's
 	// WAN interface, not just the tailnet. Without this, clients in
 	// "No exit node (direct)" get a handshake but no internet.
+	// Mode-switch cleanup: when switching modes, remove the opposite mode's
+	// stale rules so they don't linger and confuse debugging (or leak if
+	// the kill-switch DROP is ever bypassed). Deleting a non-existent rule
+	// is a no-op (error ignored).
 	if s.ExitNode == "" {
 		wan, err := n.detectWAN(ctx)
 		if err != nil {
 			return fmt.Errorf("detecting WAN interface for direct mode: %w", err)
 		}
+		// Remove stale exit-mode tailscale0 client-forwarding rules.
+		n.Run(ctx, "iptables", "-D", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT")
+		n.Run(ctx, "iptables", "-D", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+		n.Run(ctx, "iptables", "-t", "nat", "-D", "POSTROUTING", "-s", s.PoolCIDR, "-o", tsif, "-j", "MASQUERADE")
 		addPair("iptables",
 			[]string{"-C", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT"},
 			[]string{"-I", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT"})
@@ -542,6 +553,32 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 		addPair("iptables",
 			[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE"},
 			[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE"})
+		// IPv6 direct mode: mirror the v4 WAN rules for ip6tables when
+		// the v6 pool is enabled. Without this, v6 client traffic in
+		// direct mode has no FORWARD/MASQUERADE path and blackholes
+		// (or egresses un-NATed with a ULA source).
+		if v6 {
+			n.Run(ctx, "ip6tables", "-D", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT")
+			n.Run(ctx, "ip6tables", "-D", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+			n.Run(ctx, "ip6tables", "-t", "nat", "-D", "POSTROUTING", "-s", s.IPv6Pool, "-o", tsif, "-j", "MASQUERADE")
+			addPair("ip6tables",
+				[]string{"-C", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT"},
+				[]string{"-I", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT"})
+			addPair("ip6tables",
+				[]string{"-C", "FORWARD", "-i", wan, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+				[]string{"-I", "FORWARD", "-i", wan, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
+			addPair("ip6tables",
+				[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.IPv6Pool, "-o", wan, "-j", "MASQUERADE"},
+				[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.IPv6Pool, "-o", wan, "-j", "MASQUERADE"})
+		}
+	} else {
+		// Exit mode: remove stale direct-mode WAN rules from a previous
+		// direct-mode apply, so client traffic can't leak via WAN.
+		if wan, err := n.detectWAN(ctx); err == nil {
+			n.Run(ctx, "iptables", "-D", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT")
+			n.Run(ctx, "iptables", "-D", "FORWARD", "-i", wan, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+			n.Run(ctx, "iptables", "-t", "nat", "-D", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE")
+		}
 	}
 	// When using a Tailscale exit node, the WireGuard server's own traffic
 	// (handshakes, keepalives) must bypass the exit node and go direct via WAN.
