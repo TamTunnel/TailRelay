@@ -50,7 +50,7 @@ That's it. TailRelay creates `/var/lib/tailrelay/state.json` on first run, bring
 
 ### Use it
 
-Open the web UI at your VPS's tailnet IP, port 8080 — e.g. `http://100.100.10.3:8080`. By default TailRelay binds **only** to the Tailscale interface, so your tailnet login *is* the authentication. No password needed.
+Open the web UI at your VPS's tailnet IP, port 8080 — e.g. `http://100.100.20.5:8080`. By default TailRelay binds **only** to the Tailscale interface, so your tailnet login *is* the authentication. No password needed.
 
 Then: **Clients → Add client → scan the QR code** with the WireGuard app. Traffic from that client now flows:
 
@@ -61,7 +61,7 @@ Pick the mode in the dashboard: select an exit node from the list, or "No exit n
 
 ### If you're behind 1:1 NAT (e.g. Oracle Cloud)
 
-If your VPS has a private IP (e.g. `10.0.0.129`) NATed to a public IP (e.g. `202.19.29.40`), set the public endpoint before first run so client configs use the right address:
+If your VPS has a private IP (e.g. `10.0.0.50`) NATed to a public IP (e.g. `202.19.29.40`), set the public endpoint before first run so client configs use the right address:
 
 ```sh
 # Option 1: env file (recommended with systemd)
@@ -207,7 +207,7 @@ Both. With an exit node selected, all client traffic exits through it (full tunn
 You can't while clients exist — the UI refuses the change and tells you to remove them first. (Reason: the server would take `.1` of the new pool while clients kept stale IPs from the old one, silently breaking them.) Pick the pool before enrolling clients.
 
 **Does it support IPv6 clients?**
-Yes — dual-stack is the default (WG Easy-style). On first run Tailrelay generates a random ULA `/64` (e.g. `fd3a:9c1e:77b2::/64`), the server takes `::1`, clients get `::2`, `::3`…, and the default client `AllowedIPs` is `0.0.0.0/0, ::/0`. NAT (`ip6tables` MASQUERADE) and the kill-switch DROP cover both families. To run IPv4-only, clear the IPv6 pool field in Settings (the UI also normalizes the default `AllowedIPs` back to `0.0.0.0/0` for you — leaving `::/0` with no v6 pool would blackhole client IPv6 traffic). The v6 pool, like the v4 pool, can't be changed while clients exist.
+Yes — dual-stack is the default (WG Easy-style). On first run Tailrelay generates a random ULA `/64` (e.g. `fd12:3456:789a::/64`), the server takes `::1`, clients get `::2`, `::3`…, and the default client `AllowedIPs` is `0.0.0.0/0, ::/0`. NAT (`ip6tables` MASQUERADE) and the kill-switch DROP cover both families. To run IPv4-only, clear the IPv6 pool field in Settings (the UI also normalizes the default `AllowedIPs` back to `0.0.0.0/0` for you — leaving `::/0` with no v6 pool would blackhole client IPv6 traffic). The v6 pool, like the v4 pool, can't be changed while clients exist.
 
 **How do I update?**
 Replace the binary, `systemctl restart tailrelay`. State and `wg0.conf` are preserved; the interface and firewall rules are re-applied on start.

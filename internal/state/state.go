@@ -71,7 +71,7 @@ func DefaultSettings() Settings {
 }
 
 // RandomULAPool generates a random unique-local /64 (fd00::/8 + 40 random
-// bits, per RFC 4193), e.g. fd3a:9c1e:77b2::/64. WG Easy-style: every
+// bits, per RFC 4193), e.g. fd12:3456:789a::/64. WG Easy-style: every
 // install gets its own private v6 space, no coordination needed.
 func RandomULAPool() (string, error) {
 	var b [5]byte
