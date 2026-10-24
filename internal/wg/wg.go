@@ -498,10 +498,12 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	// Without this, a restrictive INPUT policy (e.g. REJECT all) drops
 	// handshake packets before they reach the WireGuard socket.
 	// The port comes from settings so custom ListenPort works too.
+	// Use -I (insert at top) not -A (append): on hosts with a REJECT-all
+	// rule, an appended ACCEPT lands AFTER the REJECT and is never reached.
 	port := strconv.Itoa(s.ListenPort)
 	addPair("iptables",
 		[]string{"-C", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"},
-		[]string{"-A", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
+		[]string{"-I", "INPUT", "1", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
 	addPair("iptables",
 		[]string{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
 		[]string{"-I", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})

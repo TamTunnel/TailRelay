@@ -337,7 +337,7 @@ func TestEnsureNATAddsInputRuleForWGPort(t *testing.T) {
 		t.Fatalf("ensureNAT: %v", err)
 	}
 	joined := strings.Join(f.calls, "\n")
-	want := "iptables -A INPUT -p udp --dport 51820 -j ACCEPT"
+	want := "iptables -I INPUT 1 -p udp --dport 51820 -j ACCEPT"
 	if !strings.Contains(joined, want) {
 		t.Errorf("missing INPUT ACCEPT for WireGuard port, want %q in:\n%s", want, joined)
 	}
