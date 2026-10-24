@@ -649,11 +649,13 @@ func (n *NetOps) detectWAN(ctx context.Context) (string, error) {
 }
 
 // ensureDrop installs the kill-switch DROP if absent.
+// Uses -I (insert at top) not -A: on hosts with a REJECT-all rule,
+// an appended DROP lands AFTER the REJECT and is never reached.
 func (n *NetOps) ensureDrop(ctx context.Context, bin, tsif string) error {
 	drop := []string{"FORWARD", "-i", n.Iface, "!", "-o", tsif, "-j", "DROP"}
 	check := append([]string{"-C"}, drop...)
 	if _, err := n.Run(ctx, bin, check...); err != nil {
-		add := append([]string{"-A"}, drop...)
+		add := append([]string{"-I", "FORWARD", "1"}, drop[1:]...)
 		if _, err := n.Run(ctx, bin, add...); err != nil {
 			return fmt.Errorf("%s kill-switch: %w", bin, err)
 		}
