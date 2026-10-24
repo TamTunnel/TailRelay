@@ -587,6 +587,14 @@ func (s *Server) handleExitNode(w http.ResponseWriter, r *http.Request) {
 	}); err != nil {
 		log.Printf("warning: persisting exit-node choice: %v", err)
 	}
+	// Re-apply WireGuard NAT/FORWARD rules for the new mode: switching
+	// between exit-node and direct changes which interface gets MASQUERADE
+	// and FORWARD rules. Without this, the rules stay stuck on the old mode
+	// and the new mode has no forwarding path.
+	if err := s.applyWG(r.Context()); err != nil {
+		redirectErr(w, r, "/", fmt.Errorf("exit node set but interface re-apply failed: %w", err))
+		return
+	}
 	if node == "" {
 		redirectMsg(w, r, "/", "exit node cleared")
 	} else {

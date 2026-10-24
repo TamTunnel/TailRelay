@@ -59,7 +59,7 @@ func dropCalls(calls []string, flag string) []string {
 	return out
 }
 
-const wantDropAdd = "iptables -A FORWARD -i wg0 ! -o tailscale0 -j DROP"
+const wantDropAdd = "iptables -I FORWARD 1 -i wg0 ! -o tailscale0 -j DROP"
 const wantDropDel = "iptables -D FORWARD -i wg0 ! -o tailscale0 -j DROP"
 
 func TestEnsureNATKillSwitchOn(t *testing.T) {
@@ -71,24 +71,16 @@ func TestEnsureNATKillSwitchOn(t *testing.T) {
 	if err := n.ensureNAT(ctx, s); err != nil {
 		t.Fatal(err)
 	}
-	adds := dropCalls(f.calls, "-A")
+	adds := dropCalls(f.calls, "-I")
 	if len(adds) != 1 {
-		t.Fatalf("expected exactly one DROP -A, got %v", adds)
+		t.Fatalf("expected exactly one DROP -I, got %v", adds)
 	}
 	if adds[0] != wantDropAdd {
 		t.Errorf("got %q, want %q", adds[0], wantDropAdd)
 	}
-	// The DROP must be appended after the ACCEPT rules so legitimate
-	// relay traffic matches first: it should be the last FORWARD -A.
-	lastForwardAdd := ""
-	for _, c := range f.calls {
-		if strings.HasPrefix(c, "iptables -A FORWARD") {
-			lastForwardAdd = c
-		}
-	}
-	if lastForwardAdd != wantDropAdd {
-		t.Errorf("DROP rule is not the last FORWARD append: %q", lastForwardAdd)
-	}
+	// The DROP uses -I (insert at top) so it beats the host REJECT-all
+	// rule. DROP only matches non-tailscale traffic, so legitimate relay
+	// traffic still reaches the ACCEPT rules.
 }
 
 func TestEnsureNATKillSwitchOnIdempotent(t *testing.T) {
@@ -98,8 +90,8 @@ func TestEnsureNATKillSwitchOnIdempotent(t *testing.T) {
 	if err := n.ensureNAT(ctx, v4Settings(true)); err != nil {
 		t.Fatal(err)
 	}
-	if adds := dropCalls(f.calls, "-A"); len(adds) != 0 {
-		t.Errorf("rule already present but -A was still issued: %v", adds)
+	if adds := dropCalls(f.calls, "-I"); len(adds) != 0 {
+		t.Errorf("rule already present but -I was still issued: %v", adds)
 	}
 }
 
@@ -117,8 +109,8 @@ func TestEnsureNATKillSwitchOffRemoves(t *testing.T) {
 	if dels[0] != wantDropDel {
 		t.Errorf("got %q, want %q", dels[0], wantDropDel)
 	}
-	if adds := dropCalls(f.calls, "-A"); len(adds) != 0 {
-		t.Errorf("kill switch off but DROP -A issued: %v", adds)
+	if adds := dropCalls(f.calls, "-I"); len(adds) != 0 {
+		t.Errorf("kill switch off but DROP -I issued: %v", adds)
 	}
 }
 
@@ -166,7 +158,7 @@ func ip6Drops(calls []string, flag string) []string {
 	return out
 }
 
-const wantV6DropAdd = "ip6tables -A FORWARD -i wg0 ! -o tailscale0 -j DROP"
+const wantV6DropAdd = "ip6tables -I FORWARD 1 -i wg0 ! -o tailscale0 -j DROP"
 const wantV6DropDel = "ip6tables -D FORWARD -i wg0 ! -o tailscale0 -j DROP"
 const wantV6Masq = "ip6tables -t nat -A POSTROUTING -s fd12:3456:789a::/64 -o tailscale0 -j MASQUERADE"
 
@@ -190,22 +182,13 @@ func TestEnsureNATDualStack(t *testing.T) {
 		t.Errorf("missing v6 MASQUERADE; calls:\n%s", strings.Join(f.calls, "\n"))
 	}
 	// v6 kill-switch DROP, exactly once, and last among ip6tables FORWARD -A.
-	adds := ip6Drops(f.calls, "-A")
+	adds := ip6Drops(f.calls, "-I")
 	if len(adds) != 1 || adds[0] != wantV6DropAdd {
-		t.Errorf("v6 DROP -A = %v, want exactly [%s]", adds, wantV6DropAdd)
-	}
-	last := ""
-	for _, c := range f.calls {
-		if strings.HasPrefix(c, "ip6tables -A FORWARD") {
-			last = c
-		}
-	}
-	if last != wantV6DropAdd {
-		t.Errorf("v6 DROP is not the last ip6tables FORWARD append: %q", last)
+		t.Errorf("v6 DROP = %v, want exactly [%s]", adds, wantV6DropAdd)
 	}
 	// v4 rules still installed alongside.
-	if n := len(dropCalls(f.calls, "-A")); n != 1 {
-		t.Errorf("expected exactly one v4 DROP -A, got %d", n)
+	if n := len(dropCalls(f.calls, "-I")); n != 1 {
+		t.Errorf("expected exactly one v4 DROP -I, got %d", n)
 	}
 }
 
@@ -303,7 +286,7 @@ func TestEnsureNATDirectModeAddsWANRules(t *testing.T) {
 	}
 	// No kill-switch DROP installed in direct mode (only -C checks, no -A).
 	for _, c := range f.calls {
-		if strings.Contains(c, "-A FORWARD") && strings.Contains(c, "-j DROP") {
+		if strings.Contains(c, "-I FORWARD 1") && strings.Contains(c, "-j DROP") {
 			t.Errorf("direct mode must not install kill-switch DROP, got: %q", c)
 		}
 	}
