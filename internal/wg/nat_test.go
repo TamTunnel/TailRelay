@@ -301,10 +301,16 @@ func TestEnsureNATExitNodeModeNoWANRules(t *testing.T) {
 		t.Fatalf("ensureNAT: %v", err)
 	}
 	joined := strings.Join(f.calls, "\n")
-	// Must not add FORWARD rules for WAN (client traffic stays on tailnet),
-	// but the mangle/MASQUERADE bypass for the WG server port is expected.
-	if strings.Contains(joined, "-i wg0 -o ens3") {
-		t.Errorf("exit-node mode must not add WAN FORWARD rules:\n%s", joined)
+	// Must not ADD FORWARD rules for WAN (client traffic stays on tailnet).
+	// DELETE calls for stale WAN rules are expected cleanup, not adds —
+	// so check for -I/-A (add) specifically, not -D (delete).
+	for _, c := range f.calls {
+		if (strings.Contains(c, "-I FORWARD") || strings.Contains(c, "-A FORWARD")) && strings.Contains(c, "-o ens3") {
+			t.Errorf("exit-node mode must not add WAN FORWARD rules, got: %q\n%s", c, joined)
+		}
+		if strings.Contains(c, "-A POSTROUTING") && strings.Contains(c, "-o ens3") {
+			t.Errorf("exit-node mode must not add WAN MASQUERADE, got: %q\n%s", c, joined)
+		}
 	}
 	if !strings.Contains(joined, "-i wg0 ! -o tailscale0 -j DROP") {
 		t.Errorf("exit-node mode with kill switch should keep DROP:\n%s", joined)
@@ -349,6 +355,47 @@ func TestEnsureNATExitNodeAddsFwmarkBypass(t *testing.T) {
 	// Old mangle/MASQUERADE approach must be gone.
 	if strings.Contains(joined, "mangle -A OUTPUT") {
 		t.Errorf("must not use mangle OUTPUT MARK (use fwmark+ip rule instead):\n%s", joined)
+	}
+}
+
+func TestEnsureNATExitNodeAddsPoolReturnRoute(t *testing.T) {
+	f := &natFake{checkFails: true}
+	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+	s := v4Settings(true)
+	s.ExitNode = "us-homerouter"
+	s.PoolCIDR = "10.7.0.0/24"
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	// The 5268 rule routes de-NATed return traffic (dst=pool) via the main
+	// table (which has the wg0 route) BEFORE Tailscale's 5270 catch-all
+	// (from all lookup 52). Without it, return packets loop back to the
+	// exit node instead of reaching WireGuard clients.
+	want := "ip -4 rule add to 10.7.0.0/24 lookup main pref 5268"
+	if !strings.Contains(joined, want) {
+		t.Errorf("exit-node mode must add pool return route, want %q in:\n%s", want, joined)
+	}
+}
+
+func TestEnsureNATDirectModeRemovesPoolReturnRoute(t *testing.T) {
+	f := &natFake{checkFails: true}
+	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+	s := v4Settings(true)
+	s.ExitNode = "" // direct mode
+	s.PoolCIDR = "10.7.0.0/24"
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	// Direct mode must remove the 5268 rule (no exit node to bypass).
+	want := "ip -4 rule del to 10.7.0.0/24 lookup main pref 5268"
+	if !strings.Contains(joined, want) {
+		t.Errorf("direct mode must remove pool return route, want %q in:\n%s", want, joined)
+	}
+	// And must NOT add it.
+	if strings.Contains(joined, "ip -4 rule add to 10.7.0.0/24 lookup main pref 5268") {
+		t.Errorf("direct mode must not add pool return route:\n%s", joined)
 	}
 }
 

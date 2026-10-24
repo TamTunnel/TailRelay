@@ -164,6 +164,12 @@ func Load(args []string, tailscaleIP string) (*Config, error) {
 			"refusing to bind %s without a password: set TR_ADMIN_PASSWORD or bind to the tailscale IP / localhost",
 			c.BindAddr)
 	}
+	if publicBind(c.BindAddr) && !c.TLSEnabled() {
+		// Not a refusal (password is set, and a reverse proxy may terminate
+		// TLS), but loud: without TLS the password and session cookie cross
+		// the wire in cleartext.
+		fmt.Fprintf(os.Stderr, "WARNING: public bind %s without TLS — admin password and session cookie travel in cleartext; set TR_TLS_CERT/TR_TLS_KEY or terminate TLS in a reverse proxy\n", c.BindAddr)
+	}
 	return c, nil
 }
 

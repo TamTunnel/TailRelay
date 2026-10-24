@@ -272,17 +272,6 @@ func SetExitNode(ctx context.Context, run Runner, name string) error {
 	return err
 }
 
-// SuggestExitNode picks the first online candidate (used when the stored
-// choice no longer exists). Returns "" if none are online.
-func SuggestExitNode(nodes []ExitNode) string {
-	for _, n := range nodes {
-		if n.Online {
-			return n.Hostname
-		}
-	}
-	return ""
-}
-
 // SetAdvertiseRoutes sets the routes advertised to the tailnet.
 func SetAdvertiseRoutes(ctx context.Context, run Runner, routes string) error {
 	_, err := run(ctx, "tailscale", "set", "--advertise-routes="+routes)

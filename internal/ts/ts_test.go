@@ -97,19 +97,6 @@ func TestSetExitNodeCommand(t *testing.T) {
 	}
 }
 
-func TestSuggestExitNode(t *testing.T) {
-	nodes := []ExitNode{
-		{Hostname: "down", Online: false},
-		{Hostname: "up", Online: true},
-	}
-	if got := SuggestExitNode(nodes); got != "up" {
-		t.Errorf("got %q, want up", got)
-	}
-	if got := SuggestExitNode(nil); got != "" {
-		t.Errorf("got %q, want empty", got)
-	}
-}
-
 func TestGetStatusError(t *testing.T) {
 	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, errors.New("tailscale: command not found")
