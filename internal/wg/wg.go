@@ -507,17 +507,23 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	addPair("iptables",
 		[]string{"-C", "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT"},
 		[]string{"-I", "INPUT", "1", "-p", "udp", "--dport", port, "-j", "ACCEPT"})
-	addPair("iptables",
-		[]string{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
-		[]string{"-I", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})
-	addPair("iptables",
-		[]string{"-C", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
-		[]string{"-I", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
-	addPair("iptables",
-		[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.PoolCIDR, "-o", tsif, "-j", "MASQUERADE"},
-		[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.PoolCIDR, "-o", tsif, "-j", "MASQUERADE"})
+	// Tailscale0 client-forwarding rules: only in exit mode. In direct mode
+	// client traffic goes via WAN, not the tailnet — adding these pairs
+	// unconditionally would re-add them after the direct-mode cleanup
+	// deletes them (pairs execute after the inline deletions below).
+	if s.ExitNode != "" {
+		addPair("iptables",
+			[]string{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
+			[]string{"-I", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})
+		addPair("iptables",
+			[]string{"-C", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"},
+			[]string{"-I", "FORWARD", "-i", tsif, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"})
+		addPair("iptables",
+			[]string{"-t", "nat", "-C", "POSTROUTING", "-s", s.PoolCIDR, "-o", tsif, "-j", "MASQUERADE"},
+			[]string{"-t", "nat", "-A", "POSTROUTING", "-s", s.PoolCIDR, "-o", tsif, "-j", "MASQUERADE"})
+	}
 	v6 := s.IPv6Pool != ""
-	if v6 {
+	if v6 && s.ExitNode != "" {
 		addPair("ip6tables",
 			[]string{"-C", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"},
 			[]string{"-I", "FORWARD", "-i", n.Iface, "-o", tsif, "-j", "ACCEPT"})
@@ -574,10 +580,17 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	} else {
 		// Exit mode: remove stale direct-mode WAN rules from a previous
 		// direct-mode apply, so client traffic can't leak via WAN.
+		// Covers both v4 and v6 (asymmetric cleanup would leave stale
+		// ip6tables WAN rules after a direct→exit switch with v6 on).
 		if wan, err := n.detectWAN(ctx); err == nil {
 			n.Run(ctx, "iptables", "-D", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT")
 			n.Run(ctx, "iptables", "-D", "FORWARD", "-i", wan, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 			n.Run(ctx, "iptables", "-t", "nat", "-D", "POSTROUTING", "-s", s.PoolCIDR, "-o", wan, "-j", "MASQUERADE")
+			if v6 {
+				n.Run(ctx, "ip6tables", "-D", "FORWARD", "-i", n.Iface, "-o", wan, "-j", "ACCEPT")
+				n.Run(ctx, "ip6tables", "-D", "FORWARD", "-i", wan, "-o", n.Iface, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+				n.Run(ctx, "ip6tables", "-t", "nat", "-D", "POSTROUTING", "-s", s.IPv6Pool, "-o", wan, "-j", "MASQUERADE")
+			}
 		}
 	}
 	// When using a Tailscale exit node, the WireGuard server's own traffic
