@@ -1,4 +1,7 @@
 #!/bin/sh
+# DEPRECATED: Docker deployment is deprecated and unmaintained.
+# Exit-node mode does NOT work in containers. Direct mode only.
+# Use the host binary deployment instead — see README.md.
 # TailRelay container entrypoint: run Tailscale via containerboot (official
 # Tailscale container init) for proper kernel-mode networking, then exec
 # the Go binary.

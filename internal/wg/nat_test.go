@@ -433,3 +433,80 @@ func TestEnsureNATEmitsNoMangleSocketRules(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureNATDirectModeAddsV6WANRules(t *testing.T) {
+	f := &natFake{checkFails: true}
+	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ip" {
+			return []byte("default via 10.0.0.1 dev ens3 proto dhcp metric 100\n"), nil
+		}
+		return f.run(ctx, name, args...)
+	}
+	n := &NetOps{Run: run, Iface: "wg0", TSIface: "tailscale0"}
+	s := dualSettings(false)
+	s.ExitNode = "" // direct mode, v6 pool enabled
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	for _, want := range []string{
+		"ip6tables -I FORWARD -i wg0 -o ens3 -j ACCEPT",
+		"ip6tables -I FORWARD -i ens3 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"ip6tables -t nat -A POSTROUTING -s fd12:3456:789a::/64 -o ens3 -j MASQUERADE",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing v6 direct-mode rule %q\ncalls:\n%s", want, joined)
+		}
+	}
+}
+
+func TestEnsureNATExitModeDeletesStaleWANRules(t *testing.T) {
+	f := &natFake{checkFails: true}
+	run := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ip" {
+			return []byte("default via 10.0.0.1 dev ens3 proto dhcp metric 100\n"), nil
+		}
+		return f.run(ctx, name, args...)
+	}
+	n := &NetOps{Run: run, Iface: "wg0", TSIface: "tailscale0"}
+	s := dualSettings(true)
+	s.ExitNode = "us-homerouter" // exit mode, v6 pool enabled
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	joined := strings.Join(f.calls, "\n")
+	// Both v4 and v6 stale WAN rules must be deleted on exit-mode apply.
+	for _, want := range []string{
+		"iptables -D FORWARD -i wg0 -o ens3 -j ACCEPT",
+		"iptables -D FORWARD -i ens3 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"iptables -t nat -D POSTROUTING -s 10.7.0.0/24 -o ens3 -j MASQUERADE",
+		"ip6tables -D FORWARD -i wg0 -o ens3 -j ACCEPT",
+		"ip6tables -D FORWARD -i ens3 -o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT",
+		"ip6tables -t nat -D POSTROUTING -s fd12:3456:789a::/64 -o ens3 -j MASQUERADE",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing stale WAN deletion %q\ncalls:\n%s", want, joined)
+		}
+	}
+}
+
+func TestEnsureNATDirectModeNoTailscaleRules(t *testing.T) {
+	f := &natFake{checkFails: true}
+	n := &NetOps{Run: f.run, Iface: "wg0", TSIface: "tailscale0"}
+	s := v4Settings(false)
+	s.ExitNode = "" // direct mode
+	if err := n.ensureNAT(context.Background(), s); err != nil {
+		t.Fatalf("ensureNAT: %v", err)
+	}
+	// Direct mode must NOT add tailscale0 client-forwarding rules
+	// (they were previously added unconditionally, then deleted, then
+	// re-added by the pairs loop — defeating the cleanup).
+	for _, c := range f.calls {
+		if (strings.Contains(c, "-I FORWARD") || strings.Contains(c, "-A FORWARD")) && strings.Contains(c, "tailscale0") {
+			t.Errorf("direct mode must not add tailscale0 FORWARD rule, got: %q", c)
+		}
+		if strings.Contains(c, "-A POSTROUTING") && strings.Contains(c, "tailscale0") {
+			t.Errorf("direct mode must not add tailscale0 MASQUERADE, got: %q", c)
+		}
+	}
+}
