@@ -548,6 +548,10 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 	// The WireGuard interface carries a fwmark (its listen port, set in Apply);
 	// this rule sends marked packets to the main table at pref 5269, ahead of
 	// Tailscale's own "5270: from all lookup 52" exit-node rule.
+	// Also: return traffic to WireGuard clients (de-NATed, dst=pool CIDR)
+	// must NOT go via the exit node (table 52) — it must go via wg0.
+	// The 5268 rule routes pool destinations via main table BEFORE 5270,
+	// otherwise return packets loop back to the exit node and never reach clients.
 	if s.ExitNode != "" {
 		fwmark := strconv.Itoa(s.ListenPort)
 		for _, fam := range []string{"-4", "-6"} {
@@ -560,11 +564,34 @@ func (n *NetOps) ensureNAT(ctx context.Context, s state.Settings) error {
 				return fmt.Errorf("adding fwmark bypass rule: %w", err)
 			}
 		}
+		// Pool return route: dst=pool CIDR via main table (which has wg0 route),
+		// before Tailscale's 5270 catch-all. Without this, de-NATed return
+		// packets are routed back to the exit node instead of to wg0.
+		pool := s.PoolCIDR
+		if pool != "" {
+			n.Run(ctx, "ip", "-4", "rule", "del", "to", pool, "lookup", "main", "pref", "5268")
+			if _, err := n.Run(ctx, "ip", "-4", "rule", "add", "to", pool, "lookup", "main", "pref", "5268"); err != nil {
+				return fmt.Errorf("adding pool return route rule: %w", err)
+			}
+		}
+		if s.IPv6Pool != "" {
+			n.Run(ctx, "ip", "-6", "rule", "del", "to", s.IPv6Pool, "lookup", "main", "pref", "5268")
+			if _, err := n.Run(ctx, "ip", "-6", "rule", "add", "to", s.IPv6Pool, "lookup", "main", "pref", "5268"); err != nil {
+				return fmt.Errorf("adding v6 pool return route rule: %w", err)
+			}
+		}
 	} else {
 		// No exit node: remove the bypass rules if they exist.
 		fwmark := strconv.Itoa(s.ListenPort)
 		for _, fam := range []string{"-4", "-6"} {
 			n.Run(ctx, "ip", fam, "rule", "del", "fwmark", fwmark, "lookup", "main", "pref", "5269")
+		}
+		// Remove pool return route rules.
+		if s.PoolCIDR != "" {
+			n.Run(ctx, "ip", "-4", "rule", "del", "to", s.PoolCIDR, "lookup", "main", "pref", "5268")
+		}
+		if s.IPv6Pool != "" {
+			n.Run(ctx, "ip", "-6", "rule", "del", "to", s.IPv6Pool, "lookup", "main", "pref", "5268")
 		}
 		// Also clean up the old (incorrect) 5270 rules from previous versions.
 		for _, fam := range []string{"-4", "-6"} {
