@@ -1,3 +1,9 @@
+# DEPRECATED: The Docker image is deprecated and unmaintained.
+# Exit-node mode does NOT work in containers (Tailscale userspace mode
+# breaks TCP forwarding for exit-node traffic). Direct mode only.
+# Use the host binary deployment instead — see README.md.
+# This file is kept for existing Docker users; it will be removed in a
+# future release.
 # ---- build ----
 FROM golang:1.24-bookworm AS build
 ARG VERSION=dev

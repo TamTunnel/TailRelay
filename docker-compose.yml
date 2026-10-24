@@ -1,3 +1,10 @@
+# DEPRECATED: Docker deployment is deprecated and unmaintained.
+# Exit-node mode does NOT work in containers (Tailscale userspace mode
+# breaks TCP forwarding for exit-node traffic). DIRECT MODE ONLY.
+# Use the host binary deployment instead — see README.md.
+# This file is kept for existing Docker users; it will be removed in a
+# future release.
+#
 # Tailrelay in Docker — self-contained bridge appliance.
 #
 # The container runs its OWN tailscaled in the same network namespace as
@@ -28,7 +35,10 @@ services:
       # NOTE: do NOT publish 41641/udp if the host already runs Tailscale
       # (port clash). The container's tailscaled works fine via DERP relays
       # without it; direct connections are a latency optimization only.
-      - "8080:8080"       # web UI (also reachable via the container's tailnet IP)
+      # DEPRECATED: binding 8080 to all interfaces exposes the admin UI
+      # publicly with no login (container 0.0.0.0 is exempt from the password
+      # requirement). Bind to localhost only, or set TR_ADMIN_PASSWORD.
+      - "127.0.0.1:8080:8080" # web UI (also reachable via the container's tailnet IP)
     volumes:
       # persisted state (private keys!). wg0.conf is regenerated from state
       # on every start — do NOT bind-mount it (Docker would create it as a
