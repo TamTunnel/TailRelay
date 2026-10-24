@@ -47,9 +47,10 @@ type rawStatus struct {
 		TailscaleIPs []string `json:"TailscaleIPs"`
 	} `json:"Self"`
 	ExitNodeStatus *struct {
-		ID       string `json:"ID"`
-		Online   bool   `json:"Online"`
-		Hostinfo *struct {
+		ID           string   `json:"ID"`
+		Online       bool     `json:"Online"`
+		TailscaleIPs []string `json:"TailscaleIPs"`
+		Hostinfo     *struct {
 			HostName string `json:"HostName"`
 		} `json:"Hostinfo"`
 	} `json:"ExitNodeStatus"`
@@ -70,6 +71,11 @@ func ParseStatus(data []byte) (*Status, error) {
 		st.UsingExitNode = raw.ExitNodeStatus.Online
 		if raw.ExitNodeStatus.Hostinfo != nil && raw.ExitNodeStatus.Hostinfo.HostName != "" {
 			st.ExitNodeName = raw.ExitNodeStatus.Hostinfo.HostName
+		} else if len(raw.ExitNodeStatus.TailscaleIPs) > 0 {
+			// Fall back to IP, not the cryptic node ID (e.g. "nteNM65qby11CNTRL").
+			// The UI's exit-node list (from `tailscale exit-node list`) has
+			// proper hostnames; this is just the status line fallback.
+			st.ExitNodeName = raw.ExitNodeStatus.TailscaleIPs[0]
 		} else {
 			st.ExitNodeName = raw.ExitNodeStatus.ID
 		}
