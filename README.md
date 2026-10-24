@@ -215,14 +215,6 @@ Replace the binary, `systemctl restart tailrelay`. State and `wg0.conf` are pres
 **What if my firewall rules get flushed?**
 Restart TailRelay (`systemctl restart tailrelay`) or click Apply in Settings — both re-assert all rules from state.
 
-## Docker (deprecated)
-
-> **Docker deployment is deprecated and unmaintained.** The files (`Dockerfile`, `docker-compose.yml`, `entrypoint.sh`) are kept for existing users but will be removed in a future release. New deployments should use the host binary above.
-
-**Direct mode only.** Exit-node mode does **not** work in containers: Tailscale runs in userspace mode inside a container, which bypasses kernel conntrack/NAT for forwarded traffic. UDP (DNS) works, but TCP connections fail — return packets arrive but never reach WireGuard clients. This is a fundamental container limitation, not a TailRelay bug. Direct mode (no exit node) works fine in Docker.
-
-If you still use Docker, the setup is unchanged from before (see git history for the Docker section). Host deployment is the only supported path for exit nodes.
-
 ## Tailscale prerequisite
 
 Tailrelay assumes `tailscaled` is **already installed and (usually) logged in** on the VPS:
