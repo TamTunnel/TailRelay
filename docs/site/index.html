@@ -87,11 +87,7 @@ Your browser doesn't support the video tag — <a href="tailrelay-explainer.mp4"
 
 <h2>Run it</h2>
 <div class="card">
-<pre><code>docker run -d --name tailrelay --network host --cap-add NET_ADMIN \
-  -v /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock \
-  -v tailrelay-state:/var/lib/tailrelay \
-  ghcr.io/tamtunnel/tailrelay:latest</code></pre>
-<p>Or grab the static binary from <a href="https://github.com/TamTunnel/TailRelay">GitHub</a> and run it with systemd — <code>tailscaled</code> must already be installed and logged in. Full docs in the <a href="https://github.com/TamTunnel/TailRelay#quick-start">README</a>.</p>
+<p>Grab the static binary from <a href="https://github.com/TamTunnel/TailRelay">GitHub</a> and run it with systemd — <code>tailscaled</code> must already be installed and logged in. Full docs in the <a href="https://github.com/TamTunnel/TailRelay#quick-start">README</a>.</p>
 </div>
 
 <h2>How traffic flows</h2>
