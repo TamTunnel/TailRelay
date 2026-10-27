@@ -14,7 +14,7 @@ Tailrelay runs on a VPS and does three small jobs:
 
 1. **It's a WireGuard server.** It generates the server keys, hands each client the next free IP (from `10.7.0.0/24` by default), and gives you a `.conf` file plus a QR code per client. Presets for DNS, MTU and keepalive are tunable.
 2. **It bridges into Tailscale.** Client traffic is NATed onto the tailnet interface, so WireGuard-only devices can reach your tailnet.
-3. **It lets you pick a Tailscale exit node** from the web UI — so all that WireGuard traffic exits through whichever country/node you choose. Or pick direct mode and traffic exits via the VPS itself.
+3. **It lets you pick a Tailscale exit node** from the web UI — so all that WireGuard traffic exits through whichever node you choose. Or pick direct mode and traffic exits via the VPS itself.
 
 One static Go binary (~14 MB), no runtime, no database — state is a single JSON file. A web UI manages everything. It was inspired by [TailGuard](https://github.com/juhovh/tailguard) (which bridges an *existing* WireGuard network into Tailscale); Tailrelay goes the other direction and *creates* the WireGuard server.
 
@@ -59,7 +59,7 @@ Then: **Clients → Add client → scan the QR code** with the WireGuard app. Tr
 
 Pick the mode in the dashboard: select an exit node from the list, or "No exit node (direct)".
 
-### If you're behind 1:1 NAT (e.g. Oracle Cloud)
+### If you're behind 1:1 NAT (e.g. AWS/DigitalOcean/Oracle Cloud)
 
 If your VPS has a private IP (e.g. `10.0.0.50`) NATed to a public IP (e.g. `202.19.29.40`), set the public endpoint before first run so client configs use the right address:
 
