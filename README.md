@@ -59,7 +59,7 @@ Then: **Clients → Add client → scan the QR code** with the WireGuard app. Tr
 
 Pick the mode in the dashboard: select an exit node from the list, or "No exit node (direct)".
 
-### If you're behind 1:1 NAT (e.g. Oracle Cloud)
+### If you're behind 1:1 NAT (e.g. Digital Ocean/AWS/Oracle Cloud)
 
 If your VPS has a private IP (e.g. `10.0.0.50`) NATed to a public IP (e.g. `202.19.29.40`), set the public endpoint before first run so client configs use the right address:
 
